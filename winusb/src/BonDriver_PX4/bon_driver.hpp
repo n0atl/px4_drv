@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <string>
+#include <cstdint>
 #include <mutex>
 #include <map>
 #include <queue>
@@ -83,8 +84,10 @@ private:
 	px4::ReceiverInfoSet receivers_;
 	bool lnb_power_;
 	bool lnb_power_state_;
+	std::int32_t isdbc_frequency_offset_khz_;
 	std::uint32_t pipe_timeout_;
 	std::uint32_t tune_timeout_;
+	int initial_channel_;
 	px4::CtrlCmdClient ctrl_client_;
 	std::unique_ptr<px4::PipeClient> data_pipe_;
 	BOOL open_;

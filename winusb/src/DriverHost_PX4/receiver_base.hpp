@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
 #include <memory>
 #include <mutex>
 #include <condition_variable>
@@ -22,6 +23,11 @@ public:
 		px4::SystemType system;
 		std::uint32_t freq;
 		std::uint32_t bandwidth;
+		std::uint32_t symbol_rate;
+		std::uint32_t modulation;
+		std::uint32_t tsmf_mode;
+		std::uint32_t tsmf_relative_stream;
+		std::uint32_t tsmf_slot_offset;
 		std::uint32_t stream_id;
 	};
 
@@ -35,18 +41,50 @@ public:
 		void Start() noexcept;
 		void Stop() noexcept;
 		void StopRequest() noexcept;
+		/* The input side must retain null packets for a TSMF frame.  This
+		 * filter runs at the final output stage: after TSMF selection when
+		 * enabled, and directly on ordinary TS otherwise. */
+		void SetDiscardNullPacketsOnOutput(bool enabled) noexcept;
+		/* PID 0x002f is a TSMF multi-frame header.  It is an ISDB-C-only
+		 * output filter and is never applied to terrestrial or satellite TS. */
+		void SetDiscardTsmfHeaderPacketsOnIsdbCOutput(bool enabled) noexcept;
+		void SetTsmfRelativeStream(bool enabled, std::uint8_t stream, std::int32_t slot_offset) noexcept;
 		bool Write(const void *buf, std::size_t &size) noexcept;
 		void NotifyWrite() noexcept;
 		void HandleRead(std::size_t buf_size, std::function<bool(const void *buf, std::size_t size)> handler);
 		bool Purge() noexcept;
 
 	private:
+		bool TsmfSelectPacket(const std::uint8_t *packet) noexcept;
+		bool TsmfParseHeader(const std::uint8_t *packet) noexcept;
+
 		std::mutex mtx_;
+		std::mutex tsmf_mtx_;
 		px4::RingBuffer ringbuf_;
 		std::atomic_bool stop_;
 		std::condition_variable cond_;
 		std::size_t write_size_;
 		std::size_t threshold_size_;
+		bool discard_null_packets_on_output_;
+		bool discard_tsmf_header_packets_on_isdbc_output_;
+		bool tsmf_enabled_;
+		bool tsmf_logged_header_;
+		std::uint8_t tsmf_relative_stream_;
+		std::int32_t tsmf_slot_offset_;
+		int tsmf_slot_;
+		std::array<std::uint8_t, 15> tsmf_stream_enabled_;
+		std::array<std::uint8_t, 52> tsmf_slot_stream_;
+		/* TSMF diagnostics.  These counters are reset for every tune. */
+		std::uint64_t tsmf_input_packets_;
+		std::uint64_t tsmf_selected_packets_;
+		std::uint64_t tsmf_rejected_packets_;
+		std::uint64_t tsmf_header_packets_;
+		std::uint64_t tsmf_tei_packets_;
+		std::uint64_t tsmf_null_packets_;
+		std::uint64_t tsmf_discontinuity_indicators_;
+		std::uint64_t tsmf_cc_gaps_;
+		std::array<std::uint8_t, 8192> tsmf_last_cc_;
+		std::array<std::uint8_t, 8192> tsmf_cc_valid_;
 	};
 
 	ReceiverBase(unsigned int options);
