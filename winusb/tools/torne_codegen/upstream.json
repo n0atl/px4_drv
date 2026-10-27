@@ -1,0 +1,30 @@
+{
+  "repository": "https://github.com/Till0196/coax",
+  "revision": "2d9f2c263a3b080ecef3a8ede1eb86c6afa48405",
+  "sha256": {
+    "pkg/fr30/fr30.go": "831a7480186b9c8ebd335694f295c1b61ff9895cc0ab9820ed58337b748a5d21",
+    "pkg/fr30/fr30_test.go": "756420257e2ce83e09bb08549b7d0b2fe62b1ecf7cc35f6e13a96870d1044757",
+    "pkg/fr30/isa.go": "0993a76a03b620054401be39183e7fe5b4545dce2e3e2a607ed7e710c980e43e",
+    "pkg/fr30/isa_test.go": "eed4cb7b16c72c0cf63fe8d4cfbcc2a7f975a68aafe48ff323a94351337e9e37",
+    "pkg/fr30/sched.go": "7705a19b2139d6df22a1acfa6844e9a4879e6a040a307e3c175b3d2f8017b7ed",
+    "pkg/fr30/sched_test.go": "d5827c2a417f5cd4e42d9bdd3fe0d6d0878720d1923ab166ba13a6fd5cfd8c36",
+    "pkg/fr30/sim/sim.go": "c1b1d9bc06c3041006920d61e3b43a45289f7f093b7325697f05d80984a74113",
+    "pkg/fr30/sim/sim_test.go": "c4488253eb186dde36e5627528d4e6e88336683322a14bcd8958d0c135b69f95",
+    "internal/coaxd/usb/bridge/mb86h47/fr30/fc/block.go": "eb45db452f6cb36bd60e145498e1986c84b40a26af441eb8e2833c43fdb9ee7e",
+    "internal/coaxd/usb/bridge/mb86h47/fr30/fc/fc.go": "483cea301b23fd68a15f5d62371569f83a8993c7ee435dab71db5271c710214d",
+    "internal/coaxd/usb/bridge/mb86h47/fr30/fc/fc_test.go": "e1707c7bebd74079650a309310ee656b8fd589a8000a681fa27d3f143661c83d",
+    "internal/coaxd/usb/bridge/mb86h47/fr30/fc/gen.go": "1de88f89f7d79c9fda5866ccbe35defe14fa74d793c444bb1488e6727d43ac38",
+    "internal/coaxd/usb/bridge/mb86h47/fr30/fc/node.go": "4c96632e08f4301f49490f8772a5712fe2fc258bec850091d7b6327136a36b54",
+    "internal/coaxd/usb/bridge/mb86h47/core0prog.go": "5f0ee35464ba5f3c145b8a20f4dc645f0bd593614cd751f088dba407b80a31ab",
+    "internal/coaxd/usb/bridge/mb86h47/core1prog.go": "0a888dc80127361e03732db0b36825af048c4fbef58b917407b9c3427367fb40",
+    "internal/coaxd/usb/bridge/mb86h47/trapprog.go": "c229bcadf57011da3183ed06a38e0a6f6811ce5bc9ab3707ca0d11f74b88a4e7",
+    "internal/coaxd/usb/bridge/mb86h47/addressing.go": "6d59885708a60f4488d7066310bb00e85e36e9e81873c2ec4073ab59eeaf4b0e",
+    "internal/coaxd/usb/bridge/mb86h47/mb86h47.go": "9dbcb141ac4c2f596e3de64d4ead1c9d87a42c957798ee64535b2abab3d0bbf2",
+    "internal/coaxd/usb/bridge/mb86h47/i2c.go": "1d79bda51d442816898bb1b142d0c12bd865dd15ff924abca8fa375a3a637996",
+    "internal/coaxd/usb/bridge/mb86h47/command.go": "e0b6dd2a52f5cd40150b5f47017a54cf4d5626d1f0e2cb5b7826eb83e0379ab0",
+    "internal/coaxd/usb/bridge/mb86h47/stream.go": "565b90634dfecb0ad2796c3bf74767fcffdf68b92f608fa712b47065702f1c58",
+    "COPYING": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "NOTICE": "4b9ee010f01b1ab919b739015bda2785da81ec8f21dc7c99987e4f9e89e84402"
+  }
+}

@@ -1,0 +1,250 @@
+coax
+Copyright 2026 Till0196
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program; if not, see <https://www.gnu.org/licenses/>. The full text is in
+the COPYING file beside this one.
+
+Most of the code is also available under the Apache License, Version 2.0, whose
+full text is in LICENSE-APACHE beside this file. Which terms apply to which file
+is set out below.
+
+--------------------------------------------------------------------------------
+THE EFFECTIVE LICENCE OF A BUILD
+
+This module builds three programs: cmd/coax, the scanner and client; cmd/coaxd,
+the tuner host; and cmd/fwextract, which extracts firmware from a vendor's own
+driver package. They share a module but not a linkage -- coax reaches coaxd over
+HTTP and imports none of its packages -- so what a binary carries depends on
+which one it is.
+
+Every file carries an SPDX-License-Identifier line, and each falls into one of
+three groups.
+
+  Apache-2.0 OR GPL-2.0-or-later
+      Written for this module with no third party in it. A recipient takes it
+      under either licence, whichever suits.
+
+  GPL-2.0-or-later
+      Derived from work under GPL-2.0-or-later. The file's own copyright lines
+      say whose, and DERIVED WORK below names the projects.
+
+  GPL-2.0-only
+      Derived from work under GPL-2.0-only, likewise named below.
+
+cmd/coax and cmd/fwextract reach nothing outside the first group, so either may
+be taken under Apache-2.0 alone. cmd/coaxd reaches all three, so a build of it
+is GPL-2.0-only as a whole.
+
+The dual grouping is what lets both hold at once. Apache-2.0 cannot be combined
+with GPL-2.0-only, so if the first group were Apache-2.0 alone, coaxd could not
+be distributed; the GPL branch is the one coaxd takes.
+
+--------------------------------------------------------------------------------
+DERIVED WORK
+
+The USB board drivers here are this module's own work rather than a port of an
+existing driver. Where an existing free driver covers the same silicon it is
+named below, because the register-level behaviour necessarily agrees with it and
+because parts of this module are derived from it.
+
+px4_drv by nns779, GPL-2.0-only
+    https://github.com/nns779/px4_drv
+    internal/coaxd/usb/board/{plex,px4,pxmlt,isdb2056,s1ur}
+    internal/coaxd/usb/bridge/it930x
+    internal/coaxd/demod/{cxd2856er,tc90522}
+    internal/coaxd/tuner/{r850,rt710,cxd2858er}
+
+The Linux media subsystem's Siano driver, GPL-2.0-or-later
+    internal/coaxd/usb/bridge/siano
+    internal/coaxd/usb/board/s270
+
+The Linux media subsystem's TDA18271 driver by Michael Krufky, GPL-2.0-or-later
+    internal/coaxd/tuner/tda18211/maps.go
+
+    The TDA18211 is the ISDB-T sibling of the TDA18271. The frequency maps that
+    file holds -- the RF band, gain taper, bandpass, K/M, image-rejection and
+    the two PLL maps -- are the ones tda18271-maps.c carries for the same
+    silicon. Nothing else in that package comes from it.
+
+The PX-W3U3 series NM120 tuner driver by Budi Rachmanto, GPL-2.0-only
+    internal/coaxd/tuner/nm120
+
+TurboSight's linux_media tree, GPL-2.0-or-later and GPL-2.0-only by file
+    https://github.com/tbsdtv/linux_media
+    internal/coaxd/demod/{avl6882,cxd2857er,cxd2878,m88rs6060,mxl58x,si2183,sony,stid135,stv091x,tas2101}
+    internal/coaxd/tuner/{av201x,r848,rda5816,stv6120}
+    internal/coaxd/usb/board/{tbs5520,tbs5520se,tbs5530}
+    internal/coaxd/usb/bridge/{tbs,tbs5520,tbs5520se,tbs5530}
+
+    That tree carries each driver under its own terms, and the files here follow
+    whichever applies. The copyright lines at the top of each file name the
+    holders; grouped by the driver they come from:
+
+      avl6882.c, tas2101.c, av201x.c, r848.c, si2183.c, GPL-2.0-or-later
+          Luis Alves, with Rafael Micro's part in r848
+      cxd2878.c, m88rs6060.c, GPL-2.0-or-later
+          Davin Zhang of TurboSight, over Sony's and Montage's own material
+      rda5816.c, MODULE_LICENSE("GPL"), which the kernel reads as v2 or later
+          Davin
+      mxl58x.c, stv091x.c, stv6120.c, GPL-2.0-only
+          Ralph Metzler and Marcus Metzler of Digital Devices, with MaxLinear's
+          part in mxl58x
+      stid135, GPL-2.0-only over a BSD-3-Clause core
+          CrazyCat wrote the frontend; the low-level layer under it is
+          STMicroelectronics' Oxford LLA, whose notice is reproduced below
+      tbs5520.c, tbs5520se.c, tbs5530.c, GPL-2.0-only
+          Konstantin Dimitrov and Davin
+
+The Linux media subsystem's ISDB tuners and demodulator by Akihiro Tsukada,
+GPL-2.0-only
+    https://git.linuxtv.org/media.git
+    internal/coaxd/demod/tc90522
+    internal/coaxd/tuner/{mxl301rf,qm1d1b0004,qm1d1c0042}
+
+The Linux media subsystem's DiBcom DiB8000, DiB0090 and dibx000 drivers,
+GPL-2.0-only
+    https://git.linuxtv.org/media.git
+    internal/coaxd/demod/dib8096
+
+    dib8000.c, dibx000_common.c and dib0700_devices.c are GPL-2.0-only;
+    dib0090.c is GPL-2.0-or-later and is taken here under version 2. The
+    copyright is DiBcom's, with Patrick Boettcher and Olivier Grenie as
+    authors. The board values are dib0700_devices.c's STK8096GP entries.
+
+The Linux media subsystem's FC0012 tuner by Hans-Frieder Vogt, GPL-2.0-or-later
+    internal/coaxd/tuner/fc0012
+
+The Linux media subsystem's simple PLL driver, GPL-2.0-or-later
+    internal/coaxd/tuner/tda6651
+
+    dvb-pll.c by Gerd Knorr and others. The board figures here -- the band
+    table, the power-up bytes, the intermediate frequency and the step -- are
+    its dvb_pll_tda665x_earth_pt1 entry, which is the TDA6651 as an Earthsoft
+    PT1 or PT2 wires it.
+
+The MyGica T230C implementation was developed with reference to the behaviour of
+the Linux media subsystem's dvbsky, Si2168 and Si2157/Si2141 drivers. No Linux
+kernel driver source or firmware is bundled with this product.
+
+--------------------------------------------------------------------------------
+LIBRARIES LOADED AT RUN TIME
+
+libusb-1.0, LGPL-2.1-or-later
+    Used by the Windows and macOS builds, and neither bundled nor linked: both
+    resolve it by name at run time, so no copy of it forms part of this work.
+    The Linux build reaches USB devices through usbfs and does not use libusb
+    at all.
+
+--------------------------------------------------------------------------------
+THIRD-PARTY SOFTWARE NOTICES
+
+The binary distributions of programs built from this module bundle the
+following third-party software. The notices below are reproduced to satisfy the
+terms of their respective licenses. golang.org/x/text reaches cmd/coax only.
+
+--------------------------------------------------------------------------------
+STMicroelectronics Oxford LLA, reached through internal/coaxd/demod/stid135
+BSD-3-Clause
+
+Copyright (c) 2014-2016, STMicroelectronics - All Rights Reserved
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software
+without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------------
+pcsc-lite, reached through pkg/pcscd
+BSD-3-Clause
+
+The client protocol's commands, structures and constants are transcribed from
+pcsc-lite's src/winscard_msg.h and src/readers.h (https://pcsclite.apdu.fr/).
+
+Copyright (C) 2001-2004 David Corcoran <corcoran@musclecard.com>
+Copyright (C) 2003-2004 Damien Sauveron <damien.sauveron@labri.fr>
+Copyright (C) 2002-2026 Ludovic Rousseau <ludovic.rousseau@free.fr>
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. The name of the author may not be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+--------------------------------------------------------------------------------
+golang.org/x/text
+BSD-3-Clause
+
+Copyright 2009 The Go Authors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google LLC nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

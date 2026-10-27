@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release-static|x64"><Configuration>Release-static</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{C3D424C0-57A4-4AD4-B716-1C617C627A80}</ProjectGuid>
+    <RootNamespace>TorneUsbProbe</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType><PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries><CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(MSBuildThisFileDirectory)..\build\x64\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)build\torne_usb_probe\x64\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck><ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard><RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\src\common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="torne_usb_probe.cpp" />
+    <ClCompile Include="..\src\DriverHost_PX4\torne\winusb_control.cpp" />
+    <ClCompile Include="..\src\DriverHost_PX4\torne\mb86h47_bootstrap.cpp" />
+    <ClCompile Include="..\src\DriverHost_PX4\torne\mb86h47_i2c.cpp" />
+    <ClCompile Include="torne_reference_client.cpp" />
+    <ClCompile Include="torne_capture.cpp" />
+    <ClCompile Include="torne_receiver_adapter.cpp" />
+    <ClCompile Include="..\src\DriverHost_PX4\receiver_base.cpp"><TreatWarningAsError>false</TreatWarningAsError></ClCompile>
+    <ClCompile Include="..\src\DriverHost_PX4\ringbuffer.cpp"><TreatWarningAsError>false</TreatWarningAsError></ClCompile>
+    <ClCompile Include="..\src\common\msg.c"><TreatWarningAsError>false</TreatWarningAsError></ClCompile>
+    <ClCompile Include="..\src\DriverHost_PX4\torne\mb86h47_stream.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

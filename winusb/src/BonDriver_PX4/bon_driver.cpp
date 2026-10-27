@@ -66,15 +66,19 @@ bool BonDriver::Init()
 		 * as dantto4k's inner BonDriver, hiding the useful Init diagnostics. */
 		const std::wstring log_path = px4::util::path::GetFileBase() + L".log";
 
-		/* ISDB-C diagnostic build: retain every SetChannel decision in a file. */
-		if (msg_open_file(log_path.c_str()))
-			msg_set_mode(MSG_MODE_LOG_FILE);
-		msg_info("Init: directory configured\n");
-
 		if (!configs_.Load(px4::util::path::GetFileBase() + L".ini")) {
 			msg_err("Init: cannot load configuration\n");
 			return false;
 		}
+		// 既存設定の診断出力は維持し、明示した機種だけ本番用に無効化できる。
+		bool log_enabled = true;
+		if (configs_.Exists(L"BonDriver"))
+			log_enabled = px4::util::wtob(configs_.Get(L"BonDriver").Get(L"DebugLog", L"true"));
+		if (log_enabled && msg_open_file(log_path.c_str()))
+			msg_set_mode(MSG_MODE_LOG_FILE);
+		else
+			msg_set_mode(MSG_MODE_NONE);
+		msg_info("Init: directory configured\n");
 
 		std::size_t num_packets = 1024;
 		std::uintptr_t max_buffers = 64, min_buffers = 4;

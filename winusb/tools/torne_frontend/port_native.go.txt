@@ -1,0 +1,183 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Development-only mechanical port of the pinned, local dib8096 Go sources.
+// Run with Go after copying this file to a temporary .go path. Not part of a release build.
+package main
+
+import (
+ "fmt"
+ "go/ast"
+ "go/constant"
+ "go/importer"
+ "go/parser"
+ "go/token"
+ "go/types"
+ "os"
+ "path/filepath"
+ "sort"
+ "strconv"
+ "strings"
+)
+
+var fs = token.NewFileSet()
+var info = &types.Info{Types:map[ast.Expr]types.TypeAndValue{},Defs:map[*ast.Ident]types.Object{},Uses:map[*ast.Ident]types.Object{},Selections:map[*ast.SelectorExpr]*types.Selection{}}
+var anon = map[*types.Struct]string{}
+var structs = map[string]*types.Struct{}
+var emitted = map[string]bool{}
+var out strings.Builder
+var results *types.Tuple
+var resultNames []string
+var serial int
+func id(s string) string {return "v_"+s}
+func base(t types.Type) string {if p,ok:=t.(*types.Pointer);ok{return base(p.Elem())};if n,ok:=t.(*types.Named);ok{return n.Obj().Name()};panic(t.String())}
+func typ(t types.Type) string {
+ if t==nil{return "void"}; if t.String()=="error" {return "Error"}
+ switch t:=t.(type) {
+ case *types.Basic:
+  switch t.Kind(){case types.Bool,types.UntypedBool:return "bool";case types.String,types.UntypedString:return "std::string";case types.Uint8:return "std::uint8_t";case types.Uint16:return "std::uint16_t";case types.Uint32:return "std::uint32_t";case types.Uint64,types.Uint,types.Uintptr:return "std::uint64_t";case types.Int8:return "std::int8_t";case types.Int16:return "std::int16_t";case types.Int32:return "std::int32_t";case types.Int64,types.Int,types.UntypedInt,types.UntypedRune:return "std::int64_t";case types.Float32:return "float";case types.Float64,types.UntypedFloat:return "double";case types.UntypedNil:return "std::nullptr_t"}
+ case *types.Named:
+  if t.Obj().Pkg()!=nil {switch t.Obj().Pkg().Path(){case "time":if t.Obj().Name()=="Time"{return "Time"};return "std::int64_t";case "github.com/Till0196/coax/pkg/i2c":return "Bus*"}}
+  return "T_"+t.Obj().Name()
+ case *types.Pointer:return typ(t.Elem())+"*"
+ case *types.Slice:return "Slice<"+typ(t.Elem())+">"
+ case *types.Array:return "std::array<"+typ(t.Elem())+", "+fmt.Sprint(t.Len())+">"
+ case *types.Signature:
+  var p []string;for i:=0;i<t.Params().Len();i++{p=append(p,typ(t.Params().At(i).Type()))};return "std::function<"+ret(t.Results())+"("+strings.Join(p,",")+")>"
+ case *types.Tuple:return ret(t)
+ case *types.Struct:
+  n,ok:=anon[t];if !ok {n=fmt.Sprint("Anon",len(anon));anon[t]=n;structs[n]=t};return "T_"+n
+ }
+ panic("unsupported type "+t.String())
+}
+func ret(t *types.Tuple)string{if t==nil||t.Len()==0{return "void"};if t.Len()==1{return typ(t.At(0).Type())};var a []string;for i:=0;i<t.Len();i++{a=append(a,typ(t.At(i).Type()))};return "std::tuple<"+strings.Join(a,",")+">"}
+func cast(t types.Type,s string)string{return "static_cast<"+typ(t)+">("+s+")"}
+func expr(e ast.Expr)string{
+ switch n:=e.(type){
+ case *ast.Ident:
+  switch n.Name{case "nil":return "nullptr";case "true","false":return n.Name}
+  return id(n.Name)
+ case *ast.BasicLit:return n.Value
+ case *ast.ParenExpr:return "("+expr(n.X)+")"
+ case *ast.StarExpr:return "(*"+expr(n.X)+")"
+ case *ast.SelectorExpr:
+  if sel:=info.Selections[n];sel!=nil{
+   if sel.Kind()==types.MethodVal {return method(sel.Obj().(*types.Func))+"_BOUND"}
+   sep:=".";if _,ok:=info.TypeOf(n.X).(*types.Pointer);ok{sep="->"};return "("+expr(n.X)+")"+sep+id(n.Sel.Name)
+  }
+  p:=n.X.(*ast.Ident).Name;switch p{case "time":switch n.Sel.Name{case "Now":return "Now";case "Second":return "INT64_C(1000000000)";case "Millisecond":return "INT64_C(1000000)";case "Microsecond":return "INT64_C(1000)"}}
+  panic("selector "+p+"."+n.Sel.Name)
+ case *ast.IndexExpr:
+  x:=expr(n.X);if _,ok:=info.TypeOf(n.X).(*types.Pointer);ok{x="(*"+x+")"};return "At("+x+","+expr(n.Index)+")"
+ case *ast.SliceExpr:
+  lo:="0";hi:="Len("+expr(n.X)+")";if n.Low!=nil{lo=expr(n.Low)};if n.High!=nil{hi=expr(n.High)};return "Subslice("+expr(n.X)+","+lo+","+hi+")"
+ case *ast.UnaryExpr:
+  if n.Op==token.AND {if c,ok:=n.X.(*ast.CompositeLit);ok{return "new "+typ(info.TypeOf(c))+"("+composite(c)+")"};return "(&"+expr(n.X)+")"}
+  op:=n.Op.String();if n.Op==token.XOR {op="~"};if n.Op==token.SUB{return "Neg<"+typ(info.TypeOf(n))+">("+expr(n.X)+")"};return cast(info.TypeOf(n),op+"("+expr(n.X)+")")
+ case *ast.BinaryExpr:
+  a,b:=expr(n.X),expr(n.Y)
+  // Go sequences calls left-to-right; C++ binary operands need not do so.
+  if n.Op!=token.LAND&&n.Op!=token.LOR&&hasCall(n.X)&&hasCall(n.Y){return "[&]() { auto left = "+a+"; auto right = "+b+"; return "+binary(n,"left","right")+"; }()"}
+  return binary(n,a,b)
+ case *ast.CompositeLit:return composite(n)
+ case *ast.CallExpr:
+  var a []string;for _,v:=range n.Args{a=append(a,expr(v))}
+  if tv:=info.Types[n.Fun];tv.IsType(){return cast(info.TypeOf(n),a[0])}
+  if v,ok:=n.Fun.(*ast.Ident);ok{switch v.Name{case "len":return "Len("+strings.Join(a,",")+")";case "max","min":return "Go"+strings.Title(v.Name)+"("+strings.Join(a,",")+")";case "append":return "Append("+strings.Join(a,",")+")"}}
+  if s,ok:=n.Fun.(*ast.SelectorExpr);ok{
+   if sel:=info.Selections[s];sel!=nil&&sel.Kind()==types.MethodVal{
+    // time.Time is represented explicitly, including zero values.
+    if strings.HasPrefix(sel.Obj().Pkg().Path(),"time"){return expr(s.X)+"."+s.Sel.Name+"("+strings.Join(a,",")+")"}
+    recv:=expr(s.X);if sel.Obj().Pkg().Path()=="github.com/Till0196/coax/pkg/i2c"{return recv+"->"+s.Sel.Name+"("+strings.Join(a,",")+")"};_,wantPtr:=sel.Obj().Type().(*types.Signature).Recv().Type().(*types.Pointer);_,isPtr:=info.TypeOf(s.X).(*types.Pointer);if wantPtr&&!isPtr{recv="(&"+recv+")"};if !wantPtr&&isPtr{recv="(*"+recv+")"};return method(sel.Obj().(*types.Func))+"("+strings.Join(append([]string{recv},a...),",")+")"
+   }
+   if p,ok:=s.X.(*ast.Ident);ok&&info.Selections[s]==nil{
+    fn:="";switch p.Name{case "fmt":fn="MakeError";case "math":fn="std::log10";case "bits":fn="BitLength";case "i2c":fn="I2c"+s.Sel.Name;case "time":fn=s.Sel.Name};if fn!=""{return fn+"("+strings.Join(a,",")+")"}
+   }
+  }
+  return expr(n.Fun)+"("+strings.Join(a,",")+")"
+ }
+ panic(fmt.Sprintf("unsupported expr %T %s",e,fs.Position(e.Pos())))
+}
+func hasCall(e ast.Expr)bool{yes:=false;ast.Inspect(e,func(n ast.Node)bool{if _,ok:=n.(*ast.CallExpr);ok{yes=true};return true});return yes}
+func binary(n *ast.BinaryExpr,a,b string)string{
+ op:=n.Op.String();t:=info.TypeOf(n)
+ switch n.Op{case token.ADD,token.SUB,token.MUL:if bsc,ok:=t.Underlying().(*types.Basic);ok&&bsc.Info()&types.IsInteger!=0{fn:=map[token.Token]string{token.ADD:"Add",token.SUB:"Sub",token.MUL:"Mul"}[n.Op];return fn+"<"+typ(t)+">("+a+","+b+")"}
+ case token.SHL:return "Shl<"+typ(t)+">("+a+","+b+")"
+ case token.SHR:return "Shr<"+typ(t)+">("+a+","+b+")"
+ case token.AND_NOT:return cast(t,"("+a+") & ~("+b+")")}
+ if n.Op==token.EQL||n.Op==token.NEQ||n.Op==token.LSS||n.Op==token.GTR||n.Op==token.LEQ||n.Op==token.GEQ||n.Op==token.LAND||n.Op==token.LOR{return "("+a+" "+op+" "+b+")"}
+ return cast(t,"("+a+") "+op+" ("+b+")")
+}
+func composite(n *ast.CompositeLit)string{
+ t:=info.TypeOf(n);name:=typ(t)
+ if st,ok:=t.Underlying().(*types.Struct);ok{
+  var b strings.Builder;b.WriteString("[&]() { "+name+" value{}; ");for i,e:=range n.Elts{field:=st.Field(i).Name();v:=e;if kv,ok:=e.(*ast.KeyValueExpr);ok{field=kv.Key.(*ast.Ident).Name;v=kv.Value};b.WriteString("value."+id(field)+" = "+expr(v)+"; ")};b.WriteString("return value; }()");return b.String()
+ }
+ var a []string;for _,v:=range n.Elts{a=append(a,expr(v))};if _,ok:=t.(*types.Array);ok{return name+"{{"+strings.Join(a,",")+"}}"};return name+"{"+strings.Join(a,",")+"}"
+}
+func method(f *types.Func)string{return "m_"+base(f.Type().(*types.Signature).Recv().Type())+"_"+f.Name()}
+func line(s string){out.WriteString(s+"\n")}
+func block(b *ast.BlockStmt){line("{");for _,s:=range b.List{stmt(s)};line("}")}
+func simple(s ast.Stmt)string{
+ switch n:=s.(type){case *ast.IncDecStmt:return expr(n.X)+n.Tok.String();case *ast.ExprStmt:return expr(n.X);case *ast.AssignStmt:if len(n.Lhs)!=1||len(n.Rhs)!=1{panic("multi simple")};lhs:=expr(n.Lhs[0]);rhs:=expr(n.Rhs[0]);if n.Tok==token.DEFINE{return typ(info.TypeOf(n.Lhs[0]))+" "+lhs+" = "+rhs};if n.Tok==token.AND_NOT_ASSIGN{return lhs+" = "+cast(info.TypeOf(n.Lhs[0]),lhs+" & ~("+rhs+")")};return lhs+" "+n.Tok.String()+" "+rhs};panic(fmt.Sprintf("simple %T",s))
+}
+func stmt(s ast.Stmt){
+ switch n:=s.(type){
+ case *ast.BlockStmt:block(n)
+ case *ast.DeclStmt:
+  d:=n.Decl.(*ast.GenDecl);for _,spec:=range d.Specs{v:=spec.(*ast.ValueSpec);for i,name:=range v.Names{value:="{}";if i<len(v.Values){value=" = "+expr(v.Values[i])};line(typ(info.Defs[name].Type())+" "+id(name.Name)+value+";")}}
+ case *ast.AssignStmt:
+  if len(n.Lhs)==1{line(simple(n)+";");return};serial++;tmp:=fmt.Sprint("tmp",serial)
+  var vals []string;if len(n.Rhs)==1 {line("auto "+tmp+" = "+expr(n.Rhs[0])+";");for i:=range n.Lhs{vals=append(vals,fmt.Sprintf("std::get<%d>(%s)",i,tmp))}}else{for i,v:=range n.Rhs{vname:=fmt.Sprintf("%s_%d",tmp,i);line("auto "+vname+" = "+expr(v)+";");vals=append(vals,vname)}}
+  for i,lhs:=range n.Lhs{if v,ok:=lhs.(*ast.Ident);ok&&v.Name=="_"{continue};prefix:="";if v,ok:=lhs.(*ast.Ident);ok&&info.Defs[v]!=nil{prefix=typ(info.TypeOf(lhs))+" "};line(prefix+expr(lhs)+" = "+vals[i]+";")}
+ case *ast.ExprStmt:line(expr(n.X)+";")
+ case *ast.IncDecStmt:line(simple(n)+";")
+ case *ast.ReturnStmt:
+  var a []string;for _,v:=range n.Results{a=append(a,expr(v))};if len(a)==0&&results.Len()>0{a=resultNames};if len(a)>1{line("return {"+strings.Join(a,",")+"};")}else{line("return "+strings.Join(a,",")+";")}
+ case *ast.IfStmt:
+  if n.Init!=nil{line("{");stmt(n.Init)};line("if ("+expr(n.Cond)+")");block(n.Body);if n.Else!=nil{line("else");stmt(n.Else)};if n.Init!=nil{line("}")}
+ case *ast.ForStmt:
+  init,cond,post:="","true","";if n.Init!=nil{init=simple(n.Init)};if n.Cond!=nil{cond=expr(n.Cond)};if n.Post!=nil{post=simple(n.Post)};line("for ("+init+";"+cond+";"+post+")");block(n.Body)
+ case *ast.RangeStmt:
+  serial++;v:=fmt.Sprint("range",serial);x:=expr(n.X);if _,ok:=info.TypeOf(n.X).(*types.Pointer);ok{x="(*"+x+")"};line("{ auto&& "+v+" = "+x+";");key:=fmt.Sprint("index",serial);line("for (std::int64_t "+key+"=0; "+key+"<Len("+v+"); ++"+key+") {");if k,ok:=n.Key.(*ast.Ident);ok&&k.Name!="_"{line("auto "+id(k.Name)+" = "+key+";")};if val,ok:=n.Value.(*ast.Ident);ok&&val.Name!="_"{line("auto "+id(val.Name)+" = "+v+"["+key+"];")};for _,s:=range n.Body.List{stmt(s)};line("}}")
+ case *ast.SwitchStmt:
+  line("{");if n.Init!=nil{stmt(n.Init)};tag:="";if n.Tag!=nil{serial++;tag=fmt.Sprint("switch",serial);line("auto "+tag+" = "+expr(n.Tag)+";")};line("do {");first:=true;var def *ast.CaseClause
+  for _,s:=range n.Body.List{c:=s.(*ast.CaseClause);if c.List==nil{def=c;continue};var cases []string;for _,v:=range c.List{x:=expr(v);if tag!=""{x=tag+" == "+x};cases=append(cases,"("+x+")")};p:="if";if !first{p="else if"};first=false;line(p+" ("+strings.Join(cases," || ")+") {");for _,s:=range c.Body{stmt(s)};line("}")};if def!=nil{if !first{line("else")};line("{");for _,s:=range def.Body{stmt(s)};line("}")};line("} while(false); }")
+ case *ast.BranchStmt:line(n.Tok.String()+";")
+ case *ast.DeferStmt:
+  // The native bus submits writes immediately; Flush is a no-op. No return-value defer is required.
+  if s,ok:=n.Call.Fun.(*ast.SelectorExpr);!ok||s.Sel.Name!="flush"{panic("unsupported defer")}
+ case *ast.EmptyStmt:
+ default:panic(fmt.Sprintf("unsupported stmt %T %s",s,fs.Position(s.Pos())))
+ }
+}
+func skip(f *ast.FuncDecl)bool{if f.Recv==nil{return f.Name.Name=="New"};t:=base(info.TypeOf(f.Recv.List[0].Type));return t=="tunerBus"||t=="Demod"&&(f.Name.Name=="flush"||f.Name.Name=="setTiming")||t=="dib8000"&&f.Name.Name=="modifyWord"}
+func signature(f *ast.FuncDecl)string{
+ sig:=info.Defs[f.Name].Type().(*types.Signature);name:=id(f.Name.Name);var a []string
+ if sig.Recv()!=nil{name=method(info.Defs[f.Name].(*types.Func));a=append(a,typ(sig.Recv().Type())+" "+id(f.Recv.List[0].Names[0].Name))}
+ for i:=0;i<sig.Params().Len();i++{p:=sig.Params().At(i);a=append(a,typ(p.Type())+" "+id(p.Name()))}
+ return ret(sig.Results())+" "+name+"("+strings.Join(a,",")+")"
+}
+func dependency(t types.Type){switch v:=t.(type){case *types.Named:if _,ok:=v.Underlying().(*types.Struct);ok{emitStruct(v.Obj().Name())};case *types.Struct:typ(v);emitStruct(anon[v]);case *types.Array:dependency(v.Elem())}}
+func emitStruct(name string){if emitted[name]||structs[name]==nil{return};emitted[name]=true;s:=structs[name]
+ for i:=0;i<s.NumFields();i++{t:=s.Field(i).Type();typ(t);dependency(t)}
+ line("struct T_"+name+" {");for i:=0;i<s.NumFields();i++{f:=s.Field(i);line(typ(f.Type())+" "+id(f.Name())+"{};")};line("};")
+}
+type localImporter struct{fallback types.Importer;i2c *types.Package}
+func (i localImporter)Import(path string)(*types.Package,error){if path=="github.com/Till0196/coax/pkg/i2c"{return i.i2c,nil};return i.fallback.Import(path)}
+func main(){
+ if len(os.Args)!=3{panic("source-dir output")};dir:=os.Args[1];pkgs,err:=parser.ParseDir(fs,dir,func(f os.FileInfo)bool{return strings.HasSuffix(f.Name(),".go")&&!strings.HasSuffix(f.Name(),"_test.go")},parser.ParseComments);if err!=nil{panic(err)}
+ var files []*ast.File;var paths []string;for p:=range pkgs["dib8096"].Files{paths=append(paths,p)};sort.Strings(paths);for _,p:=range paths{files=append(files,pkgs["dib8096"].Files[p])}
+ i2cf,err:=parser.ParseFile(fs,filepath.Join(dir,"../../../../pkg/i2c/i2c.go"),nil,0);if err!=nil{panic(err)};fallback:=importer.Default();cfg:=types.Config{Importer:fallback};i2cp,err:=cfg.Check("github.com/Till0196/coax/pkg/i2c",fs,[]*ast.File{i2cf},nil);if err!=nil{panic(err)};cfg.Importer=localImporter{fallback,i2cp};pkg,err:=cfg.Check("dib8096",fs,files,info);if err!=nil{panic(err)}
+ line("// SPDX-License-Identifier: GPL-2.0-only\n// Copyright 2026 Till0196; Copyright (C) 2005-9 DiBcom, SA et al.\n// Generated C++ port of the pinned local coax dib8096 sources.\n// Regenerate with tools/torne_frontend/port_native.go.txt; do not hand edit.\n#include \"dib8096_native_runtime.hpp\"\nnamespace px4::torne::dibnative {")
+ for _,name:=range pkg.Scope().Names(){o:=pkg.Scope().Lookup(name);if tn,ok:=o.(*types.TypeName);ok{if s,ok:=tn.Type().Underlying().(*types.Struct);ok{if name!="tunerBus"{structs[name]=s;line("struct T_"+name+";")}}else{line("using T_"+name+" = "+typ(tn.Type().Underlying())+";")}}}
+ // Discover nested and function-local anonymous structures in source order.
+ for _,file:=range files{ast.Inspect(file,func(n ast.Node)bool{if e,ok:=n.(ast.Expr);ok{if t:=info.TypeOf(e);t!=nil{switch t.(type){case *types.Struct,*types.Slice,*types.Array:typ(t)}}};return true})}
+ for _,name:=range pkg.Scope().Names(){if s:=structs[name];s!=nil{for i:=0;i<s.NumFields();i++{typ(s.Field(i).Type())}}}
+ for _,name:=range pkg.Scope().Names(){if c,ok:=pkg.Scope().Lookup(name).(*types.Const);ok{value:=c.Val().ExactString();if c.Val().Kind()==constant.String{value=strconv.Quote(constant.StringVal(c.Val()))};line("constexpr "+typ(c.Type())+" "+id(name)+" = "+value+";")}}
+ var names []string;for n:=range structs{names=append(names,n)};sort.Strings(names);for _,n:=range names{emitStruct(n)}
+ for _,f:=range files{for _,d:=range f.Decls{if f,ok:=d.(*ast.FuncDecl);ok&&!skip(f){line(signature(f)+";")}}}
+ line("void m_dib8000_modifyWord(T_dib8000*, std::uint16_t, std::uint16_t, std::uint16_t);")
+ for _,f:=range files{for _,d:=range f.Decls{if g,ok:=d.(*ast.GenDecl);ok&&g.Tok==token.VAR{for _,spec:=range g.Specs{v:=spec.(*ast.ValueSpec);for i,n:=range v.Names{line(typ(info.Defs[n].Type())+" "+id(n.Name)+" = "+expr(v.Values[i])+";")}}}}}
+ for _,file:=range files{line("// Source: "+filepath.Base(fs.Position(file.Pos()).Filename));for _,d:=range file.Decls{f,ok:=d.(*ast.FuncDecl);if !ok||skip(f){continue};if f.Doc!=nil{for _,text:=range strings.Split(strings.TrimSpace(f.Doc.Text()),"\n"){line("// "+text)}};line(signature(f));line("{");results=info.Defs[f.Name].Type().(*types.Signature).Results();resultNames=nil;for i:=0;i<results.Len();i++{r:=results.At(i);resultNames=append(resultNames,id(r.Name()));if r.Name()!=""&&r.Name()!="_"{line(typ(r.Type())+" "+id(r.Name())+"{};")}};for _,s:=range f.Body.List{stmt(s)};line("}")}}
+ line("} // namespace px4::torne::dibnative")
+ if err:=os.WriteFile(os.Args[2],[]byte(out.String()),0644);err!=nil{panic(err)}
+}

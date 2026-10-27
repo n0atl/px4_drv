@@ -264,6 +264,13 @@
     <ClCompile Include="device_base.cpp" />
     <ClCompile Include="device_definition_set.cpp" />
     <ClCompile Include="device_manager.cpp" />
+    <ClCompile Include="torne\experimental_device.cpp" />
+    <ClCompile Include="torne\frontend_native_client.cpp" />
+    <ClCompile Include="torne\dib8096_native.cpp" />
+    <ClCompile Include="torne\winusb_control.cpp" />
+    <ClCompile Include="torne\mb86h47_bootstrap.cpp" />
+    <ClCompile Include="torne\mb86h47_i2c.cpp" />
+    <ClCompile Include="torne\mb86h47_stream.cpp" />
     <ClCompile Include="device_notifier.cpp" />
     <ClCompile Include="driver_host.cpp" />
     <ClCompile Include="isdb2056_device.cpp" />

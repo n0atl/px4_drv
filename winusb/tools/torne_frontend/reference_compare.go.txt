@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Diagnostic main compiled with the pinned, otherwise unmodified coax bridge.
+package main
+
+import (
+ "fmt"
+ "os"
+ "strconv"
+ "strings"
+ "time"
+ "github.com/Till0196/coax/internal/coaxd/demod/dib8096"
+ "github.com/Till0196/coax/internal/coaxd/usb/bridge/mb86h47"
+ "github.com/Till0196/coax/pkg/usbio"
+)
+
+func run() error {
+ if len(os.Args)<2||len(os.Args)>3 { return fmt.Errorf("provide comma-separated physical UHF channels and optional exact bus:address; --list lists selectors") }
+ found,err:=usbio.Devices();if err!=nil{return err}
+ if os.Args[1]=="--list" {for _,d:=range found {if d.ID.Vendor==0x054c&&d.ID.Product==0x04b2 {fmt.Printf("DEVICE selector=%s serial=%s port=%s\n",d.Location,d.Serial,d.Port)}};return nil}
+ var channels []int
+ for _,part:=range strings.Split(os.Args[1],",") { n,err:=strconv.Atoi(part);if err!=nil||n<13||n>62{return fmt.Errorf("invalid channel %q",part)};channels=append(channels,n) }
+ selector:="";if len(os.Args)==3 {selector=os.Args[2]};count:=0
+ for _,d:=range found {if d.ID.Vendor==0x054c&&d.ID.Product==0x04b2&&(selector==""||d.Location==selector) {count++}}
+ if count!=1{return fmt.Errorf("exactly one CECH-ZD1J must match selector %q, found %d",selector,count)}
+ transport,err:=usbio.Open(selector,[]usbio.ID{{Vendor:0x054c,Product:0x04b2}});if err!=nil{return err};defer transport.Close()
+ fmt.Printf("ORIGINAL DEVICE selector=%s\n",transport.Name())
+ if err:=transport.SetAlternate(0,0);err!=nil{return err}
+ bridge:=mb86h47.New(transport)
+ if err:=bridge.Start();err!=nil{return err};if err:=bridge.ResetDemodulator();err!=nil{return err}
+ if err:=bridge.Write(dib8096.Address,[]byte{0x05,0x07,0,3});err!=nil{return err}
+ demod:=dib8096.New(bridge)
+ begin:=time.Now();if err:=demod.Initialize();err!=nil{return err};defer demod.Sleep()
+ fmt.Printf("ORIGINAL BRIDGE INITIALIZE elapsed_ms=%d\n",time.Since(begin).Milliseconds())
+ all:=true
+ for _,channel:=range channels {
+  frequency:=uint32(473143000+(channel-13)*6000000)
+  bridge.PrepareStream();begin=time.Now()
+  if err:=demod.Tune(frequency);err!=nil{return err}
+  status,err:=demod.Status();if err!=nil{return err}
+  fmt.Printf("ORIGINAL BRIDGE TUNE channel=%d locked=%v cnr_db=%v elapsed_ms=%d status=%v\n",channel,status.Locked,status.CNR,time.Since(begin).Milliseconds(),status.Names)
+  if !status.Locked {all=false;continue}
+  if err:=demod.SetOutputMode(dib8096.OutputParallelGatedClock);err!=nil{return err}
+  if err:=bridge.StartStream();err!=nil{return err}
+  raw:=make([]byte,65536);total:=0;reads:=0;end:=time.Now().Add(3*time.Second);first:=time.Now();firstMS:=int64(-1)
+  quality:=newQuality()
+  for time.Now().Before(end) {n,err:=bridge.ReadStream(raw,300);reads++;total+=n;if n>0 {if firstMS<0 {firstMS=time.Since(first).Milliseconds()};quality.feed(raw[:n])};if err!=nil&&err!=usbio.ErrTimeout{return err}}
+  stop:=bridge.StopStream();output:=demod.SetOutputMode(dib8096.OutputHighZ)
+  fmt.Printf("ORIGINAL BRIDGE TS channel=%d bytes=%d reads=%d first_ms=%d packets=%d cc_anomalies=%d tei=%d malformed=%d scrambled=%d stop=%v output=%v\n",channel,total,reads,firstMS,quality.packets,quality.cc,quality.tei,quality.malformed,quality.scrambled,stop,output)
+  if stop!=nil{return stop};if output!=nil{return output};if total==0||quality.cc!=0||quality.tei!=0||quality.malformed!=0{all=false}
+ }
+ if !all{return fmt.Errorf("one or more original-bridge channels failed")};return nil
+}
+type tsQuality struct {previous [8192]int;packets,cc,tei,malformed,scrambled uint64}
+func newQuality()*tsQuality {q:=&tsQuality{};for i:=range q.previous {q.previous[i]=-1};return q}
+func(q *tsQuality)feed(data []byte){
+ if len(data)%188!=0 {q.malformed++}
+ for offset:=0;offset+188<=len(data);offset+=188 {
+  p:=data[offset:offset+188];q.packets++;if p[0]!=0x47 {q.malformed++;continue}
+  if p[3]&0xc0!=0 {q.scrambled++};pid:=int(p[1]&31)<<8|int(p[2]);afc:=(p[3]>>4)&3
+  if afc==0||(afc&2!=0&&(p[4]>183||(afc&1!=0&&p[4]>182))){q.malformed++;continue}
+  if p[1]&0x80!=0 {q.tei++;q.previous[pid]=-1;continue}
+  if afc&2!=0&&p[4]>0&&p[5]&0x80!=0 {q.previous[pid]=-1}
+  if pid==8191||afc&1==0 {continue};cc:=int(p[3]&15)
+  if q.previous[pid]>=0&&cc!=((q.previous[pid]+1)&15){q.cc++};q.previous[pid]=cc
+ }
+}
+func main(){if err:=run();err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}}
