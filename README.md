@@ -10,6 +10,8 @@ PLEX 社の [Webサイト](http://plex-net.co.jp) にて配布されている公
 
 ### 変更点 (WinUSB 版)
 
+- Sony torne CECH-ZD1J に対応（WinUSB版のみ）。復調と内蔵カードリーダーの制御を `DriverHost_PX4.exe` に統合。詳細と未確認事項は[統合手順](winusb/docs/cech-zd1j-integration.md)を参照。
+
 動作確認は Windows 10 / Windows 11 (x64) で行っています。
 
 - エラー発生時の MessageBox を表示しない設定を追加 
@@ -34,7 +36,7 @@ PLEX 社の [Webサイト](http://plex-net.co.jp) にて配布されている公
 - BS/CS の ChSet に2022年3月開局の BS 新チャンネル（BS松竹東急・BSJapanext・BSよしもと）の定義を追加
 - バージョン情報が DLL のプロパティに表示されないのを修正
 - ビルドとパッケージングを全自動で行うスクリプトを追加
-  - Visual Studio 2022 が入っていれば、build.ps1 を実行するだけで全自動でビルドからパッケージングまで行える
+  - Visual Studio 2022（C++ 開発環境・v143）と Python 3 を用意し、`winusb/build.cmd` または `build.ps1` でビルドとパッケージングを行う。通常ビルドに Go は不要で、開発用の比較試験と移植ソースの再生成にのみ必要。
 - 各機種の内蔵 B-CAS カードリーダーを利用するためのドライバを追加 (v0.6.0 以降)
   - 同梱の `WinSCard.dll` を利用するアプリケーションの実行ファイルと同じフォルダに配置すると、内蔵カードリーダーを優先して利用できるようになる
   - Windows が認識している外付けカードリーダーも引き続き利用できる
@@ -77,9 +79,14 @@ certutil.exe -addstore TrustedPublisher ".\px4_drv_winusb.cer"
 - DTV03A-1TU: `BonDriver_ISDBT2071`
 - PX-M1UR: `BonDriver_PX-M1UR`
 - PX-S1UR: `BonDriver_PX-S1UR`
+- Sony torne CECH-ZD1J: `BonDriver_Torne`
 
 お使いの PC に合うビット数のフォルダの中のファイルを**すべて**選択し、TVTest や EDCB などのソフトウェアが指定する BonDriver の配置フォルダにコピーします。  
-BonDriver と同じフォルダに DriverHost_PX4.exe / DriverHost_PX4.ini / it930x-firmware.bin があることを確認してください。
+BonDriver と同じフォルダに `DriverHost_PX4.exe` と `DriverHost_PX4.ini` があることを確認してください。
+torne 以外の機種では、同梱の `it930x-firmware.bin` も必要です。torne はホスト内に制御処理を組み込んでいるため、別途 `TorneFrontend.exe` を配置する必要はありません。
+
+ビット数は TVTest や EDCB など、利用するアプリケーションのビット数に合わせてください。
+ビルドした `dist` 全体を配布する場合は、共通のライセンス文書がある `licenses` フォルダも含めてください。
 
 使用にあたり、特段 ini ファイルの設定変更などは必要ありません。ソフトウェアごとにチャンネルスキャンを行えばそのまま視聴できます。  
 なお、BonDriver の ini ファイル内の `DisplayErrorMessage` を 1 に設定すると、オリジナル同様にエラー発生時にメッセージボックスを表示します。
