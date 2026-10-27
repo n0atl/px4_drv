@@ -65,11 +65,25 @@ foreach ($build_platform in $build_platforms) {
     if ($LASTEXITCODE -ne 0) {
         throw "Ring buffer purge test failed. platform: $build_platform"
     }
+    # torneの復調器はホスト内のC++実装。Go不要の模擬試験で状態遷移と境界を検証する。
+    msbuild tests/torne_native_frontend_test.vcxproj /t:"Rebuild" /p:"Configuration=Release-static;Platform=$build_platform;PlatformToolset=v143"
+    if ($LASTEXITCODE -ne 0) { throw "Native torne frontend test build failed. platform: $build_platform" }
+    & "build/$build_platform/Release-static/torne_native_frontend_test.exe"
+    if ($LASTEXITCODE -ne 0) { throw "Native torne frontend test failed. platform: $build_platform" }
 }
 
 # dist/ フォルダにビルドされたファイルをコピー
 # フォルダの作成
-Remove-Item -Recurse -Force dist/ -ErrorAction SilentlyContinue
+$distribution_path = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'dist'))
+if ($distribution_path -ne (Join-Path ([IO.Path]::GetFullPath($PSScriptRoot)) 'dist')) {
+    throw 'Unexpected distribution path.'
+}
+if (Test-Path -LiteralPath $distribution_path) {
+    if ((Get-Item -LiteralPath $distribution_path).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw 'Refusing to replace a redirected distribution directory.'
+    }
+    Remove-Item -LiteralPath $distribution_path -Recurse -Force
+}
 New-Item -ItemType Directory dist/
 New-Item -ItemType Directory dist/BonDriver_PX4_32bit
 New-Item -ItemType Directory dist/BonDriver_PX4_64bit
@@ -219,6 +233,12 @@ Copy-Item pkg/DriverHost_PX4/it930x-firmware.bin dist/BonDriver_PX-S1UR_64bit/it
 Get-ChildItem dist/ -Directory -Filter 'BonDriver_*' | ForEach-Object {
     $win_scard_platform = if ($_.Name.EndsWith('_32bit')) { 'x86' } else { 'x64' }
     Copy-Item "build/$win_scard_platform/Release-static/WinSCard.dll" $_.FullName
+}
+
+# CECH-ZD1J用配布物と共通ライセンス文書を配置する。
+python tools/package_torne.py
+if ($LASTEXITCODE -ne 0) {
+    throw 'Torne packaging failed.'
 }
 
 # inf ファイルをコピー

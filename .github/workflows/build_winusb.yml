@@ -33,6 +33,12 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
 
+      - name: Setup Go for reference comparison tests
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: winusb/tools/torne_frontend/go.mod
+          cache: false
+
       - name: Verify committed driver catalog
         working-directory: winusb/pkg/signing-tools
         run: ./verify.ps1 -DriverPath ../inf
@@ -45,10 +51,26 @@ jobs:
         working-directory: winusb
         run: ./build.ps1
 
+      - name: Compare native torne frontend against Go reference
+        working-directory: winusb
+        run: |
+          python tests/check_torne_native.py --arch x86
+          if ($LASTEXITCODE -ne 0) { throw 'x86 native comparison failed' }
+          python tests/check_torne_native.py --arch x64
+          if ($LASTEXITCODE -ne 0) { throw 'x64 native comparison failed' }
+
       - name: Check artifacts
         working-directory: winusb
         run: |
           $distribution_checks = @(
+              @{
+                  Directory = 'dist/BonDriver_Torne_32bit'
+                  Files = @('BonDriver_Torne.dll', 'BonDriver_Torne.ini', 'BonDriver_PX4-T.ChSet.txt')
+              },
+              @{
+                  Directory = 'dist/BonDriver_Torne_64bit'
+                  Files = @('BonDriver_Torne.dll', 'BonDriver_Torne.ini', 'BonDriver_PX4-T.ChSet.txt')
+              },
               @{
                   Directory = 'dist/BonDriver_PX4_32bit'
                   Files = @(
@@ -192,6 +214,9 @@ jobs:
               }
 
               $artifact_file_names = $distribution_check.Files + $common_distribution_file_names
+              if ($distribution_directory -like 'dist/BonDriver_Torne_*') {
+                  $artifact_file_names = @($artifact_file_names | Where-Object { $_ -ne 'it930x-firmware.bin' })
+              }
               foreach ($artifact_file_name in $artifact_file_names) {
                   $artifact_file_path = Join-Path $distribution_directory $artifact_file_name
 
@@ -203,11 +228,15 @@ jobs:
               }
           }
 
+          python tools/check_torne_package.py
+          if ($LASTEXITCODE -ne 0) { throw 'Torne package check failed' }
+
           $driver_artifact_file_paths = @(
               'dist/Driver/px4_drv_winusb.cat',
               'dist/Driver/px4_drv_winusb.cer',
               'dist/Driver/cert-install.jse',
               'dist/Driver/cert-uninstall.jse'
+              'dist/Driver/CECH-ZD1J.inf'
           )
 
           foreach ($driver_artifact_file_path in $driver_artifact_file_paths) {

@@ -1,6 +1,16 @@
 .vs/
 build/
 dist/
+dist-native-*/
+
+# Python / local diagnostic outputs
+__pycache__/
+*.py[cod]
+*.log
+*.ts
+
+# Root *.mod rule is for kernel modules; Go module definitions are source inputs.
+!go.mod
 
 *.aps
 *.user

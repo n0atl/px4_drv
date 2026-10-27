@@ -1,0 +1,42 @@
+; Copyright 2026 Till0196
+; SPDX-License-Identifier: Apache-2.0
+;
+; Locally adapted MEDIA-class INF for binding the Sony CECH-ZD1 J to the in-box WinUSB
+; driver. Class, package version and catalog name adapted locally.
+; Included in the existing px4_drv_winusb.cat; use the existing cert-install.jse.
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = Media
+ClassGuid   = {4D36E96C-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+CatalogFile = px4_drv_winusb.cat
+DriverVer   = 10/27/2026,1.0.0.1
+
+[Manufacturer]
+%ManufacturerName% = DeviceList,NTamd64,NTarm64
+
+[DeviceList.NTamd64]
+%DeviceName% = WinUSBInstall, USB\VID_054C&PID_04B2
+
+[DeviceList.NTarm64]
+%DeviceName% = WinUSBInstall, USB\VID_054C&PID_04B2
+
+[WinUSBInstall]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[WinUSBInstall.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[WinUSBInstall.HW]
+AddReg = DeviceInterfaceGUID
+
+[DeviceInterfaceGUID]
+HKR,,DeviceInterfaceGUIDs,0x10000,"{B8F4B677-E19A-4BEB-A60C-C0A7AC2D0F6B}"
+
+[Strings]
+ProviderName     = "px4_drv (coax-derived)"
+ManufacturerName = "Sony"
+DeviceName       = "Sony torne CECH-ZD1J ISDB-T Receiver Device (WinUSB)"
