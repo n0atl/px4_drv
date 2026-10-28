@@ -171,7 +171,20 @@ type dib0090Config struct {
 
 // tuner is struct dib0090_state: the DiB0090 die, reached through the
 // DiB8000's I2C master.
+type capMemoryEntry struct {
+	frequency  uint32
+	cap        int8
+	difference int16
+	valid      bool
+}
 type tuner struct {
+	fastDC        bool
+	reuseCaptrim  bool
+	capMemory     [64]capMemoryEntry
+	capLastReused bool
+	capRejected   bool
+	capObserved   int16
+
 	bus     i2c.Bus
 	address byte
 	failure *failure
@@ -931,6 +944,9 @@ const internWait = 10
 // getOffset is dib0090_get_offset.
 func (state *tuner) getOffset() int {
 	ret := internWait * 10
+	if state.fastDC {
+		ret = 50
+	}
 
 	switch state.tuneState {
 	case tunerStep2:
@@ -1146,8 +1162,20 @@ func (state *tuner) captrimSearch() int {
 
 	switch state.tuneState {
 	case tunerStart:
+		state.capLastReused = false
+		state.capRejected = false
 		state.writeReg(0x10, 0x2B1)
 		state.writeReg(0x1e, 0x0032)
+		slot := int((state.rfRequest / 6000) % 64)
+		saved := state.capMemory[slot]
+		if state.reuseCaptrim && state.identity.p1g == 0 && state.currentBand == bandUHF && saved.valid && saved.frequency == state.rfRequest && saved.cap >= 0 {
+			state.currentRF = state.rfRequest
+			state.captrim = saved.cap
+			state.fcaptrim = saved.cap
+			state.writeReg(0x18, lo4|uint16(saved.cap))
+			state.tuneState = tunerStep4
+			return 25
+		}
 
 		if state.tunerIsTuned == 0 {
 			// prepare a complete captrim
@@ -1230,7 +1258,34 @@ func (state *tuner) captrimSearch() int {
 
 		state.tuneState = tunerStep3
 
+	case tunerStep4:
+		slot := int((state.rfRequest / 6000) % 64)
+		adc := int(state.getSlowADCVal())
+		target := 200
+		if state.rest != 0 {
+			target = 400
+		}
+		difference := adc - target
+		if difference < 0 {
+			difference = -difference
+		}
+		state.capObserved = int16(difference)
+		// 研究用の保守的な許容幅。保存時との差が大きければ元の二分探索からやり直す。
+		if adc >= 0 && adc <= 1023 && difference <= int(state.capMemory[slot].difference)+10 {
+			state.capLastReused = true
+			state.tuneState = tunerStep3
+		} else {
+			state.capMemory[slot].valid = false
+			state.capRejected = true
+			state.tunerIsTuned = 0
+			state.tuneState = tunerStart
+		}
+		return 0
 	case tunerStep3:
+		if state.reuseCaptrim && state.identity.p1g == 0 && state.currentBand == bandUHF && !state.capLastReused && state.failure.err == nil {
+			slot := int((state.rfRequest / 6000) % 64)
+			state.capMemory[slot] = capMemoryEntry{frequency: state.rfRequest, cap: state.fcaptrim, difference: state.adcDiff, valid: true}
+		}
 		state.calibrate &^= captrimCal
 		state.tuneState = tunerStep0
 	}
@@ -1533,6 +1588,7 @@ func (state *tuner) setParams() error {
 	state.tuneState = tunerStart
 
 	for {
+		dcActive := state.fastDC && state.calibrate&dcCal != 0
 		ret := state.tune()
 		if ret == callbackTimeNever || state.failure.err != nil {
 			break
@@ -1541,7 +1597,12 @@ func (state *tuner) setParams() error {
 		// dib0090_tune counts in 0.1ms, but Linux sleeps in whole jiffies and
 		// found that anything below 10ms can keep the tuner from locking; so
 		// it rounds up to 10ms steps.
-		ret = 10 * (ret + 99) / 100
+		// DC較正だけ5ms単位。PLL・AGCの従来の待機下限は維持する。
+		if dcActive {
+			ret = 5 * (ret + 49) / 50
+		} else {
+			ret = 10 * (ret + 99) / 100
+		}
 		state.msleep(int(ret))
 		if state.tuneState == tunerStop {
 			break

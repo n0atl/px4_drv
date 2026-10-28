@@ -59,6 +59,18 @@ jobs:
           python tests/check_torne_native.py --arch x64
           if ($LASTEXITCODE -ne 0) { throw 'x64 native comparison failed' }
 
+      - name: Compare fast torne tuning
+        working-directory: winusb
+        env:
+          TORNE_TEST_CHANNEL_MEMORY: '1'
+          TORNE_TEST_CAPTRIM_REUSE: '1'
+          TORNE_TEST_FAST_TUNING: '1'
+        run: |
+          python tests/check_torne_native.py --arch x86
+          if ($LASTEXITCODE -ne 0) { throw 'x86 optional tuning comparison failed' }
+          python tests/check_torne_native.py --arch x64
+          if ($LASTEXITCODE -ne 0) { throw 'x64 optional tuning comparison failed' }
+
       - name: Check artifacts
         working-directory: winusb
         run: |

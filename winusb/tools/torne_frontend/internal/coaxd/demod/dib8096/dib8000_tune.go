@@ -970,7 +970,8 @@ func (state *dib8000) tune() int {
 
 	case demodStep10: // 40
 		locks = state.readLock()
-		if locks&(1<<(7-state.longestIntlvLayer)) != 0 { // mpeg lock : check the longest one
+		// 最長層を待たず、搬送波といずれかのMPEG層がロックしたら出力を許可する。
+		if locks&(1<<(7-state.longestIntlvLayer)) != 0 || (state.earlyData && locks&0x1000 != 0 && locks&0x00e0 != 0) { // mpeg lock : check the longest one
 			state.status = statusDataLocked
 			state.tuneState = demodStop
 		} else if now.After(state.timeout) {
@@ -1168,7 +1169,12 @@ func (state *dib8000) setFrontend() error {
 		}
 
 		if active {
-			state.sleep(max(callbackTime.Sub(state.now()), minTuneStep))
+			// ポーリングだけを短縮し、同期・タイムアウトに関わる段4～8は維持する。
+			minimum := minTuneStep
+			if state.fastPoll && state.tuneState != demodStep4 && state.tuneState != demodStep5 && state.tuneState != demodStep6 && state.tuneState != demodStep7 && state.tuneState != demodStep8 {
+				minimum = 3 * time.Millisecond
+			}
+			state.sleep(max(callbackTime.Sub(state.now()), minimum))
 		}
 
 		if state.failure.err != nil {

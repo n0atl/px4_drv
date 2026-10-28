@@ -74,7 +74,18 @@ bool BonDriver::Init()
 		bool log_enabled = true;
 		if (configs_.Exists(L"BonDriver"))
 			log_enabled = px4::util::wtob(configs_.Get(L"BonDriver").Get(L"DebugLog", L"true"));
-		if (log_enabled && msg_open_file(log_path.c_str()))
+		bool log_opened = false;
+		if (log_enabled) {
+			log_opened = msg_open_file(log_path.c_str());
+			if (!log_opened) {
+				// 同じDLLを複数プロセスで開いたときも各個体の選択結果を残す。
+				// 通常のファイル名は維持し、使用中の場合だけPID付きへ分ける。
+				const auto separate_log = px4::util::path::GetFileBase() + L"." +
+					std::to_wstring(GetCurrentProcessId()) + L".log";
+				log_opened = msg_open_file(separate_log.c_str());
+			}
+		}
+		if (log_opened)
 			msg_set_mode(MSG_MODE_LOG_FILE);
 		else
 			msg_set_mode(MSG_MODE_NONE);
@@ -373,6 +384,10 @@ const BOOL BonDriver::OpenTuner()
 		ioq_->Start();
 
 		open_ = TRUE;
+		// ホスト側のログを有効にせず、実際に選ばれた個体をBonごとに確認できる。
+		// 受信機名はホストが返す登録名。torneでは末尾に接続パス由来の個体IDを含む。
+		msg_info("OpenTuner: selected DeviceName=\"%ls\" ReceiverName=\"%ls\" Index=%d PID=%lu\n",
+			ri_res.device_name, ri_res.receiver_name, static_cast<int>(ri_res.index), GetCurrentProcessId());
 
 		if (initial_channel_ >= 0 && systems_ == px4::SystemType::ISDB_C) {
 			const DWORD initial_channel = static_cast<DWORD>(initial_channel_);

@@ -56,6 +56,17 @@ struct NativeFrontend::State {
 };
 NativeFrontend::NativeFrontend(Bus& bus):state_(std::make_unique<State>(bus)){}
 NativeFrontend::~NativeFrontend()=default;
+void NativeFrontend::ConfigureTuning(bool remember_channels,bool reuse_captrim,bool fast_tuning){
+    state_->board.v_useMemory=remember_channels;
+    state_->tuner.v_reuseCaptrim=reuse_captrim;
+    state_->board.v_reuseTemperature=fast_tuning;
+    state_->tuner.v_fastDC=fast_tuning;
+    state_->demod.v_fastPoll=fast_tuning;
+    state_->demod.v_earlyData=fast_tuning;
+}
+bool NativeFrontend::MemoryHit() const {return state_->board.v_memoryLastUsed;}
+bool NativeFrontend::MemoryFallback() const {return state_->board.v_memoryFallback;}
+bool NativeFrontend::CaptrimReused() const {return state_->tuner.v_capLastReused;}
 void NativeFrontend::SetClock(std::function<Time()> now){state_->demod.v_now=std::move(now);}
 bool NativeFrontend::Command(std::uint8_t kind,const std::vector<std::uint8_t>& body,std::vector<std::uint8_t>& response){
     try{return Execute(kind,body,response);}
@@ -82,6 +93,9 @@ bool NativeFrontend::Execute(std::uint8_t kind,const std::vector<std::uint8_t>& 
         response[0]=status.v_Locked;response[1]=status.v_HasCNR;response[2]=status.v_HasStrength;
         // Windows x86/x64はlittle endian。元helperと同じIEEE754バイト列を維持する。
         static_assert(sizeof(double)==8);std::memcpy(response.data()+8,&status.v_CNR,8);std::memcpy(response.data()+16,&status.v_StrengthDBm,8);break;}
+    case 0x15:
+        if(!body.empty()){error_="invalid resume command";return false;}
+        err=m_Demod_SetGPIO(board,1,true);break;
     case 0x14:
         if(!body.empty()){error_="invalid sleep command";return false;}
         err=m_Demod_SetGPIO(board,1,false);if(!err)err=m_Demod_Sleep(board);break;

@@ -34,6 +34,8 @@ private:
 	std::shared_ptr<ExperimentalSession> AcquireSession();
 	std::mutex session_mutex_;
 	std::weak_ptr<ExperimentalSession> shared_session_;
+    // ホスト存続中だけ個体の較正状態を保持し、抜去・終了時に解放する。
+    std::shared_ptr<ExperimentalSession> retained_session_;
 	std::unique_ptr<Receiver> receiver_;
 	std::atomic_bool available_{true};
 	HANDLE cancel_ = nullptr;

@@ -20,7 +20,12 @@ struct Driver {
 	bool opened = false;
 	~Driver() { if (value) { if (opened) value->CloseTuner(); value->Release(); } }
 };
+struct WindowMetrics {
+ std::uint64_t packets=0,sync=0,tei=0,cc=0,malformed=0;
+};
 struct Metrics {
+ std::array<WindowMetrics,301> windows{};
+ long long first_bad_ms=-1,last_bad_ms=-1;
 	std::uint64_t packets = 0, sync = 0, tei = 0, cc = 0, malformed = 0;
 	std::uint64_t empty_reads = 0;
 	std::uint64_t scrambled = 0;
@@ -53,22 +58,26 @@ Metrics Measure(IBonDriver2 &driver, unsigned measure_ms, FILE *capture)
 			if (!data && size) { result.read_failed = true; return result; }
 			if (!size) break;
 			if (capture && std::fwrite(data,1,size,capture)!=size) { result.read_failed=true; return result; }
-			if (size % 188) ++result.malformed;
+            // Bonから返ったバッファの到着時刻で区切る。USB上の個々のパケット時刻ではない。
+            const auto received_ms=std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now()-begin).count();
+            auto &window=result.windows[static_cast<std::size_t>(received_ms/1000<300?received_ms/1000:300)];
+            const auto bad=[&](){if(result.first_bad_ms<0)result.first_bad_ms=received_ms;result.last_bad_ms=received_ms;};
+            if (size % 188) {++result.malformed;++window.malformed;bad();}
 			for (DWORD offset = 0; offset + 188 <= size; offset += 188) {
 				const auto *packet = data + offset;
-				++result.packets;
-				if (packet[0] != 0x47) { ++result.sync; continue; }
+				++result.packets; ++window.packets;
+				if (packet[0] != 0x47) { ++result.sync; ++window.sync; bad(); continue; }
 				if (packet[3] & 0xc0) ++result.scrambled;
 				if (result.first_ms < 0) result.first_ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - begin).count();
 				const unsigned pid = ((packet[1] & 31) << 8) | packet[2];
 				const unsigned afc = (packet[3] >> 4) & 3;
-				if (!afc || ((afc & 2) && (packet[4] > 183 || ((afc & 1) && packet[4] > 182)))) { ++result.malformed; continue; }
-				if (packet[1] & 0x80) { ++result.tei; previous[pid] = -1; continue; }
+				if (!afc || ((afc & 2) && (packet[4] > 183 || ((afc & 1) && packet[4] > 182)))) { ++result.malformed; ++window.malformed; bad(); continue; }
+				if (packet[1] & 0x80) { ++result.tei; ++window.tei; bad(); previous[pid] = -1; continue; }
 				if ((afc & 2) && packet[4] && (packet[5] & 0x80)) previous[pid] = -1;
 				if (pid == 8191 || !(afc & 1)) continue;
 				const int counter = packet[3] & 15;
 				// 同じCCの重複も異常候補として計数。USB欠落だけを意味する値ではない。
-				if (previous[pid] >= 0 && counter != ((previous[pid] + 1) & 15)) ++result.cc;
+				if (previous[pid] >= 0 && counter != ((previous[pid] + 1) & 15)) {++result.cc;++window.cc;bad();}
 				previous[pid] = counter;
 			}
 			if (!remaining) break;
@@ -80,6 +89,9 @@ Metrics Measure(IBonDriver2 &driver, unsigned measure_ms, FILE *capture)
 
 int wmain(int argc, wchar_t **argv)
 {
+    // 通常アプリに近い先頭到着と初期品質を測る場合だけ、診断用Purgeを省く。
+    bool purge=true;
+    if(argc>=2&&!wcscmp(argv[argc-1],L"--no-purge")){purge=false;--argc;}
 	unsigned measure_ms = 3000;
 	if (argc >= 6 && !wcscmp(argv[argc - 2], L"--measure-ms")) {
 		wchar_t *end = nullptr;
@@ -90,7 +102,7 @@ int wmain(int argc, wchar_t **argv)
 		argc -= 2;
 	}
 	if (argc < 3 || (wcscmp(argv[2], L"--list") && wcscmp(argv[2], L"--receive"))) {
-		std::fprintf(stderr, "Usage: torne_bondriver_probe.exe <absolute-dll-path> --list | --receive <channel-index>...\n");
+		std::fprintf(stderr, "Usage: torne_bondriver_probe.exe <absolute-dll-path> --list | --receive <channel-index>... [--measure-ms N] [--no-purge]\n");
 		return 2;
 	}
 	const bool list = !wcscmp(argv[2], L"--list");
@@ -125,9 +137,10 @@ int wmain(int argc, wchar_t **argv)
 			std::fprintf(stderr, "FAIL: undefined channel index\n"); return 2;
 		}
 	}
+	const auto open_begin = Clock::now();
 	if (!driver.value->OpenTuner()) { std::fprintf(stderr, "FAIL: OpenTuner\n"); return 1; }
 	driver.opened = true;
-	std::printf("OPEN PASSED\n");
+	std::printf("OPEN PASSED open_ms=%lld\n", std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now()-open_begin).count());
 	std::fflush(stdout);
 	bool passed = true;
 	for (int i = 3; i < argc; ++i) {
@@ -136,7 +149,7 @@ int wmain(int argc, wchar_t **argv)
 		const bool tuned = !!driver.value->SetChannel(0, index);
 		const auto tune_ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - begin).count();
 		if (!tuned) { passed = false; std::printf("FAIL: tune index=%lu tune_ms=%lld\n", index, tune_ms); continue; }
-		driver.value->PurgeTsStream();
+		if(purge)driver.value->PurgeTsStream();
 		// 診断時だけTSを保存する。環境変数未指定なら通常の計数だけを行う。
 		FILE *capture=nullptr;
 		wchar_t capture_dir[MAX_PATH]{};
@@ -145,8 +158,14 @@ int wmain(int argc, wchar_t **argv)
 			const auto capture_path=std::wstring(capture_dir)+L"\\channel-"+std::to_wstring(index+13)+L".ts";
 			if(_wfopen_s(&capture,capture_path.c_str(),L"wb")){std::fprintf(stderr,"FAIL: capture open\n");return 1;}
 		}
+		const auto measure_begin = Clock::now();
 		const auto metrics = Measure(*driver.value, measure_ms, capture);
 		if(capture)std::fclose(capture);
+		// 初回はOpenTuner開始から最初のTSまでを測り、受信計数の完了時間と区別する。
+		if (i == 3 && metrics.first_ms >= 0) {
+			const auto before_measure_ms = std::chrono::duration_cast<std::chrono::milliseconds>(measure_begin-open_begin).count();
+			std::printf("INITIAL_TS open_to_ts_ms=%lld\n",before_measure_ms+metrics.first_ms);
+		}
 		const bool good = metrics.packets && !metrics.sync && !metrics.tei && !metrics.cc && !metrics.malformed && !metrics.read_failed;
 		passed = passed && good;
 		std::printf("index=%lu tune_ms=%lld first_ts_ms=%lld packets=%llu sync=%llu tei=%llu cc_anomalies=%llu malformed=%llu empty_reads=%llu scrambled=%llu status_reads=%u read_failed=%d signal=%.3f result=%s\n",
@@ -154,8 +173,15 @@ int wmain(int argc, wchar_t **argv)
 			static_cast<unsigned long long>(metrics.sync), static_cast<unsigned long long>(metrics.tei),
 			static_cast<unsigned long long>(metrics.cc), static_cast<unsigned long long>(metrics.malformed),
 			static_cast<unsigned long long>(metrics.empty_reads), static_cast<unsigned long long>(metrics.scrambled), metrics.status_reads, metrics.read_failed, driver.value->GetSignalLevel(), good ? "PASS" : "FAIL");
-		std::fflush(stdout);
-	}
+        std::printf("BAD_TIMING index=%lu first_bad_ms=%lld last_bad_ms=%lld\n",index,metrics.first_bad_ms,metrics.last_bad_ms);
+        for(std::size_t second=0;second<metrics.windows.size();++second){
+            const auto &w=metrics.windows[second];
+            if(w.packets||w.sync||w.tei||w.cc||w.malformed)std::printf("WINDOW index=%lu begin_ms=%llu packets=%llu sync=%llu tei=%llu cc=%llu malformed=%llu\n",index,
+                static_cast<unsigned long long>(second*1000),static_cast<unsigned long long>(w.packets),static_cast<unsigned long long>(w.sync),
+                static_cast<unsigned long long>(w.tei),static_cast<unsigned long long>(w.cc),static_cast<unsigned long long>(w.malformed));
+        }
+        std::fflush(stdout);
+    }
 	driver.value->CloseTuner();
 	driver.opened = false;
 	std::printf("CLOSE RETURNED\nBONDRIVER TEST %s\n", passed ? "PASSED" : "FAILED");

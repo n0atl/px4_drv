@@ -1,3 +1,4 @@
+#include <cstdlib>
 // Copyright 2026 Till0196
 // SPDX-License-Identifier: GPL-2.0-only
 #include "../src/DriverHost_PX4/torne/dib8096_native.hpp"
@@ -8,6 +9,7 @@
 #include <deque>
 #include <iostream>
 #include <thread>
+bool TestFlag(const char* name){char* value=nullptr;std::size_t length=0;_dupenv_s(&value,&length,name);const bool enabled=value&&std::string(value)=="1";std::free(value);return enabled;}
 using namespace px4::torne;
 using namespace px4::torne::dibnative;
 class FakeBus final:public Bus {
@@ -58,26 +60,40 @@ int RunFixture(int argc,char** argv){
             if(Add<std::uint16_t>(65535,1)!=0||Sub<std::uint32_t>(0,1)!=0xffffffffu||Mul<std::int32_t>(INT32_MAX,2)!=-2||Shl<std::uint32_t>(1,32)!=0||Shr<std::int32_t>(-1,40)!=-1)throw std::runtime_error("integer semantics");
             std::array<int,2> array{};bool bounded=false;try{At(array,2);}catch(const std::out_of_range&){bounded=true;}if(!bounded)throw std::runtime_error("array bounds");
             Slice<int> original{1,2};auto shared=original.sub(1,2);shared[0]=3;if(original[1]!=3)throw std::runtime_error("slice ownership");
-            for(const auto* mode:{"locked","nosignal","timeout","unknown","iofail","waitfail","cband"}){
+            {
+                FakeBus resumeBus("NUL");NativeFrontend resume(resumeBus);resume.SetClock([&](){return resumeBus.now;});
+                std::vector<std::uint8_t> response;
+                if(resume.Command(0x15,{},response)||resumeBus.count)throw std::runtime_error("resume before initialize");
+                if(!resume.Command(0x10,{},response)||!resume.Command(0x14,{},response))throw std::runtime_error("resume fixture init/sleep");
+                const auto before=resumeBus.count;
+                if(!resume.Command(0x15,{},response)||!response.empty()||resumeBus.count-before>10)throw std::runtime_error("resume reinitialized or failed");
+                if(resume.Command(0x15,{1},response))throw std::runtime_error("resume accepted body");
+                resumeBus.count=11;resumeBus.failIO=true;
+                if(resume.Command(0x15,{},response))throw std::runtime_error("resume hid I2C failure");
+            }
+            for(const auto* mode:{"locked","nosignal","timeout","unknown","iofail","waitfail","cband","remembered","capremembered"}){
+                if((std::string(mode)=="remembered"||std::string(mode)=="capremembered")&&!TestFlag("TORNE_TEST_CHANNEL_MEMORY"))continue;
+                if(std::string(mode)=="capremembered"&&!TestFlag("TORNE_TEST_CAPTRIM_REUSE"))continue;
                 char* fixture[]={argv[0],const_cast<char*>(mode),const_cast<char*>("NUL")};if(RunFixture(3,fixture))return 1;
             }
             std::cout<<"PASS: native frontend mock states, failures, integer semantics and bounds. No USB access.\n";return 0;
         }
         if(argc!=3)return 2;std::string mode=argv[1];FakeBus bus(argv[2]);
-        if(mode=="locked"||mode=="cband")bus.Locked();if(mode=="unknown")bus.regs[897]=0x7000;
+        if(mode=="locked"||mode=="cband"||(mode=="remembered"||mode=="capremembered"))bus.Locked();if(mode=="unknown")bus.regs[897]=0x7000;if(mode=="capremembered")bus.tuner[0x1a]=0x0a23;
         bus.failIO=mode=="iofail";bus.failWait=mode=="waitfail";
-        NativeFrontend frontend(bus);frontend.SetClock([&](){return bus.now;});
+        NativeFrontend frontend(bus);frontend.ConfigureTuning(TestFlag("TORNE_TEST_CHANNEL_MEMORY"),TestFlag("TORNE_TEST_CAPTRIM_REUSE"),TestFlag("TORNE_TEST_FAST_TUNING"));frontend.SetClock([&](){return bus.now;});
         auto run=[&](std::uint8_t kind,std::uint32_t hz=0){
             std::vector<std::uint8_t> body,response;if(kind==0x11)for(unsigned i=0;i<4;++i)body.push_back(std::uint8_t(hz>>(i*8)));if(kind==0x12)body={0};
             bool ok=frontend.Command(kind,body,response);bus.out<<"C "<<unsigned(kind)<<" "<<unsigned(ok)<<" ";bus.Hex(response);bus.out<<"\n";
             if(kind==0x10){bool failure=mode=="unknown"||mode=="iofail"||mode=="waitfail";if(ok==failure)throw std::runtime_error("initialize outcome");}
             else if(kind==0x11){if(ok==(mode=="timeout"))throw std::runtime_error("tune outcome");if(ok&&((mode=="nosignal")!=(response==std::vector<std::uint8_t>{1})))throw std::runtime_error("search outcome");}
             else if(!ok)throw std::runtime_error("status/output/sleep outcome");
-            if(kind==0x13){if(response.size()!=24||bool(response[0])!=(mode=="locked"||mode=="cband"))throw std::runtime_error("lock outcome");}
+            if(kind==0x13){if(response.size()!=24||bool(response[0])!=(mode=="locked"||mode=="cband"||(mode=="remembered"||mode=="capremembered")))throw std::runtime_error("lock outcome");}
         };
         run(0x10);if(mode=="unknown"||mode=="iofail"||mode=="waitfail")return 0;
         if(mode=="nosignal")bus.queues[1284]={1,0,1};
         run(0x11,mode=="cband"?93142857:473142857);run(0x13);run(0x12);run(0x14);
+        if((mode=="remembered"||mode=="capremembered")){bus.queues[1284]={0};run(0x11,473142857);run(0x13);run(0x14);}
         if(mode=="locked"){bus.queues[1284]={1,0,2};run(0x11,213142857);run(0x13);run(0x14);}
         return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}

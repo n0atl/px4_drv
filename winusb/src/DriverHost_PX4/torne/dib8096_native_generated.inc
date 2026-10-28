@@ -9,6 +9,7 @@ using T_OutputMode = std::int64_t;
 struct T_Status;
 struct T_agcConfig;
 struct T_bandwidthConfig;
+struct T_capMemoryEntry;
 struct T_channel;
 struct T_dcCalibration;
 struct T_dib0090Config;
@@ -217,9 +218,6 @@ std::uint8_t v_pllLoopdiv{};
 std::uint8_t v_adcClockRatio{};
 std::uint16_t v_pllIntLoopFilt{};
 };
-struct T_failure {
-Error v_err{};
-};
 struct T_layerParameters {
 std::int64_t v_fec{};
 std::int64_t v_modulation{};
@@ -238,12 +236,36 @@ std::uint8_t v_isdbtSbMode{};
 std::uint8_t v_isdbtLayerEnabled{};
 std::array<T_layerParameters, 3> v_layer{};
 };
+struct T_failure {
+Error v_err{};
+};
 struct T_Anon1 {
+bool v_reuseTemperature{};
+bool v_temperatureValid{};
+Time v_temperatureLast{};
+bool v_temperatureLastReused{};
+bool v_useMemory{};
+std::array<T_channel, 64> v_memory{};
+std::array<bool, 64> v_memoryValid{};
+bool v_memoryLastUsed{};
+bool v_memoryFallback{};
 T_failure v_failure{};
 T_channel v_channel{};
 T_dib8000* v_demod{};
 T_tuner* v_tuner{};
 bool v_asleep{};
+};
+struct T_Anon10 {
+std::uint32_t v_frequency{};
+std::int8_t v_cap{};
+std::int16_t v_difference{};
+bool v_valid{};
+};
+struct T_capMemoryEntry {
+std::uint32_t v_frequency{};
+std::int8_t v_cap{};
+std::int16_t v_difference{};
+bool v_valid{};
 };
 struct T_tunerIdentity {
 std::uint8_t v_version{};
@@ -251,7 +273,13 @@ std::uint8_t v_product{};
 std::uint8_t v_p1g{};
 std::uint8_t v_inSoC{};
 };
-struct T_Anon10 {
+struct T_Anon11 {
+bool v_fastDC{};
+bool v_reuseCaptrim{};
+std::array<T_capMemoryEntry, 64> v_capMemory{};
+bool v_capLastReused{};
+bool v_capRejected{};
+std::int16_t v_capObserved{};
 Bus* v_bus{};
 std::uint8_t v_address{};
 T_failure* v_failure{};
@@ -299,14 +327,14 @@ std::uint8_t v_wbdCalibrationGain{};
 Slice<T_wbdSlope> v_currentWBDTable{};
 std::uint16_t v_wbdmux{};
 };
-struct T_Anon11 {
+struct T_Anon12 {
 std::int16_t v_rangeValue{};
 std::int16_t v_slope{};
 };
-struct T_Anon12 {
+struct T_Anon13 {
 Error v_err{};
 };
-struct T_Anon13 {
+struct T_Anon14 {
 std::uint8_t v_outputMPEG2In188Bytes{};
 std::uint8_t v_hostbusDiversity{};
 std::uint8_t v_tunerIsBaseband{};
@@ -345,7 +373,9 @@ std::uint16_t v_baseRegister{};
 std::uint16_t v_selectedInterface{};
 std::uint8_t v_gate{};
 };
-struct T_Anon14 {
+struct T_Anon15 {
+bool v_earlyData{};
+bool v_fastPoll{};
 Bus* v_bus{};
 std::uint8_t v_address{};
 T_failure* v_failure{};
@@ -384,19 +414,19 @@ std::function<void(std::int64_t)> v_sleep{};
 std::function<Time()> v_now{};
 std::int64_t v_tuneTimeout{};
 };
-struct T_Anon15 {
+struct T_Anon16 {
 std::uint16_t v_min{};
 std::uint16_t v_max{};
 std::uint16_t v_minThres{};
 std::uint16_t v_maxThres{};
 };
-struct T_Anon16 {
+struct T_Anon17 {
 std::int64_t v_fec{};
 std::int64_t v_modulation{};
 std::uint8_t v_interleaving{};
 std::uint8_t v_segmentCount{};
 };
-struct T_Anon17 {
+struct T_Anon18 {
 std::int64_t v_deliverySystem{};
 std::uint32_t v_frequency{};
 std::uint32_t v_bandwidthHz{};
@@ -408,11 +438,19 @@ std::uint8_t v_isdbtSbMode{};
 std::uint8_t v_isdbtLayerEnabled{};
 std::array<T_layerParameters, 3> v_layer{};
 };
-struct T_Anon18 {
+struct T_Anon19 {
 std::uint32_t v_x{};
 std::int32_t v_y{};
 };
-struct T_Anon19 {
+struct T_Anon2 {
+bool v_Locked{};
+double v_CNR{};
+bool v_HasCNR{};
+double v_StrengthDBm{};
+bool v_HasStrength{};
+Slice<std::string> v_Names{};
+};
+struct T_Anon20 {
 std::uint8_t v_bandCaps{};
 std::uint16_t v_setup{};
 std::uint16_t v_invGain{};
@@ -441,17 +479,9 @@ std::uint8_t v_alphaExp{};
 std::uint8_t v_betaMant{};
 std::uint8_t v_betaExp{};
 std::uint8_t v_performAGCSoftsplit{};
-T_Anon15 v_split{};
+T_Anon16 v_split{};
 };
-struct T_Anon2 {
-bool v_Locked{};
-double v_CNR{};
-bool v_HasCNR{};
-double v_StrengthDBm{};
-bool v_HasStrength{};
-Slice<std::string> v_Names{};
-};
-struct T_Anon20 {
+struct T_Anon21 {
 std::uint32_t v_internal{};
 std::uint32_t v_sampling{};
 std::uint8_t v_pllPrediv{};
@@ -469,14 +499,14 @@ std::uint32_t v_ifreq{};
 std::uint32_t v_timf{};
 std::uint32_t v_xtalHz{};
 };
-struct T_Anon21 {
+struct T_Anon22 {
 T_dib8000* v_demod{};
 std::uint16_t v_deviceRevision{};
 std::uint16_t v_baseRegister{};
 std::uint16_t v_selectedInterface{};
 std::uint8_t v_gate{};
 };
-struct T_Anon22 {
+struct T_Anon23 {
 T_i2cMaster* v_master{};
 Bus* v_parent{};
 };
@@ -537,6 +567,15 @@ Slice<T_wbdSlope> v_wbd{};
 std::uint8_t v_forceCrystalMode{};
 };
 struct T_Demod {
+bool v_reuseTemperature{};
+bool v_temperatureValid{};
+Time v_temperatureLast{};
+bool v_temperatureLastReused{};
+bool v_useMemory{};
+std::array<T_channel, 64> v_memory{};
+std::array<bool, 64> v_memoryValid{};
+bool v_memoryLastUsed{};
+bool v_memoryFallback{};
 T_failure v_failure{};
 T_channel v_channel{};
 T_dib8000* v_demod{};
@@ -580,7 +619,7 @@ std::uint8_t v_alphaExp{};
 std::uint8_t v_betaMant{};
 std::uint8_t v_betaExp{};
 std::uint8_t v_performAGCSoftsplit{};
-T_Anon15 v_split{};
+T_Anon16 v_split{};
 };
 struct T_bandwidthConfig {
 std::uint32_t v_internal{};
@@ -622,6 +661,8 @@ Slice<T_wbdSlope> v_wbd{};
 std::uint8_t v_forceCrystalMode{};
 };
 struct T_dib8000 {
+bool v_earlyData{};
+bool v_fastPoll{};
 Bus* v_bus{};
 std::uint8_t v_address{};
 T_failure* v_failure{};
@@ -676,6 +717,12 @@ std::int16_t v_rangeValue{};
 std::int16_t v_slope{};
 };
 struct T_tuner {
+bool v_fastDC{};
+bool v_reuseCaptrim{};
+std::array<T_capMemoryEntry, 64> v_capMemory{};
+bool v_capLastReused{};
+bool v_capRejected{};
+std::int16_t v_capObserved{};
 Bus* v_bus{};
 std::uint8_t v_address{};
 T_failure* v_failure{};
@@ -863,6 +910,7 @@ void m_i2cMaster_initialize(T_i2cMaster* v_master,T_dib8000* v_demod,std::uint16
 void m_i2cMaster_reset(T_i2cMaster* v_master);
 std::uint16_t m_i2cMaster_gateControl(T_i2cMaster* v_master,std::uint8_t v_address7,bool v_open);
 void m_i2cMaster_selectInterface(T_i2cMaster* v_master,std::uint16_t v_intf);
+Error m_Demod_tuneRemembered(T_Demod* v_board,std::uint32_t v_hz);
 bool m_Demod_SearchFailed(T_Demod* v_board);
 void m_dib8000_modifyWord(T_dib8000*, std::uint16_t, std::uint16_t, std::uint16_t);
 Slice<T_agcConfig> v_dib8090AGCConfig = Slice<T_agcConfig>{[&]() { T_agcConfig value{}; value.v_bandCaps = static_cast<std::uint8_t>((static_cast<std::uint8_t>((static_cast<std::uint8_t>((v_bandUHF) | (v_bandVHF))) | (v_bandLBand))) | (v_bandSBand)); value.v_setup = static_cast<std::uint16_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((Shl<std::int64_t>(0,15)) | (Shl<std::int64_t>(0,14)))) | (Shl<std::int64_t>(5,11)))) | (Shl<std::int64_t>(0,10)))) | (Shl<std::int64_t>(0,9)))) | (Shl<std::int64_t>(0,8)))) | (Shl<std::int64_t>(3,5)))) | (Shl<std::int64_t>(0,4)))) | (Shl<std::int64_t>(5,1)))) | (Shl<std::int64_t>(0,0))); value.v_invGain = 787; value.v_timeStabiliz = 10; value.v_alphaLevel = 0; value.v_thlock = 118; value.v_wbdInv = 0; value.v_wbdRef = 3530; value.v_wbdSel = 1; value.v_wbdAlpha = 5; value.v_agc1Max = 65535; value.v_agc1Min = 0; value.v_agc2Max = 65535; value.v_agc2Min = 0; value.v_agc1Pt1 = 0; value.v_agc1Pt2 = 32; value.v_agc1Pt3 = 114; value.v_agc1Slope1 = 143; value.v_agc1Slope2 = 144; value.v_agc2Pt1 = 114; value.v_agc2Pt2 = 227; value.v_agc2Slope1 = 116; value.v_agc2Slope2 = 117; value.v_alphaMant = 28; value.v_alphaExp = 26; value.v_betaMant = 31; value.v_betaExp = 51; value.v_performAGCSoftsplit = 0; return value; }(),[&]() { T_agcConfig value{}; value.v_bandCaps = v_bandCBand; value.v_setup = static_cast<std::uint16_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((Shl<std::int64_t>(0,15)) | (Shl<std::int64_t>(0,14)))) | (Shl<std::int64_t>(5,11)))) | (Shl<std::int64_t>(0,10)))) | (Shl<std::int64_t>(0,9)))) | (Shl<std::int64_t>(0,8)))) | (Shl<std::int64_t>(3,5)))) | (Shl<std::int64_t>(0,4)))) | (Shl<std::int64_t>(5,1)))) | (Shl<std::int64_t>(0,0))); value.v_invGain = 787; value.v_timeStabiliz = 10; value.v_alphaLevel = 0; value.v_thlock = 118; value.v_wbdInv = 0; value.v_wbdRef = 3530; value.v_wbdSel = 1; value.v_wbdAlpha = 5; value.v_agc1Max = 0; value.v_agc1Min = 0; value.v_agc2Max = 65535; value.v_agc2Min = 0; value.v_agc1Pt1 = 0; value.v_agc1Pt2 = 32; value.v_agc1Pt3 = 114; value.v_agc1Slope1 = 143; value.v_agc1Slope2 = 144; value.v_agc2Pt1 = 114; value.v_agc2Pt2 = 227; value.v_agc2Slope1 = 116; value.v_agc2Slope2 = 117; value.v_alphaMant = 28; value.v_alphaExp = 26; value.v_betaMant = 31; value.v_betaExp = 51; value.v_performAGCSoftsplit = 0; return value; }()};
@@ -951,6 +999,13 @@ return v_config;
 Error m_Demod_Initialize(T_Demod* v_board)
 {
 Error v_err{};
+(v_board)->v_memoryValid = std::array<bool, 64>{{}};
+(v_board)->v_temperatureValid = false;
+(v_board)->v_temperatureLastReused = false;
+(v_board)->v_memoryLastUsed = false;
+(v_board)->v_memoryFallback = false;
+((v_board)->v_tuner)->v_capLastReused = false;
+((v_board)->v_tuner)->v_capMemory = std::array<T_capMemoryEntry, 64>{{}};
 ((v_board)->v_failure).v_err = nullptr;
 {
 Error v_err = m_dib8000_initialize((v_board)->v_demod);
@@ -1012,6 +1067,10 @@ return ((v_board)->v_failure).v_err;
 Error m_Demod_Tune(T_Demod* v_board,std::uint32_t v_frequencyHz)
 {
 Error v_err{};
+if ((v_board)->v_useMemory)
+{
+return m_Demod_tuneRemembered(v_board,v_frequencyHz);
+}
 ((v_board)->v_failure).v_err = nullptr;
 if (((v_frequencyHz < v_minimumFrequencyHz) || (v_frequencyHz > v_maximumFrequencyHz)))
 {
@@ -1058,12 +1117,27 @@ else
 m_dib8000_setGPIO(v_demod,3,0,1);
 }
 } while(false); }
+(v_board)->v_temperatureLastReused = false;
+bool v_needsTemperature = (static_cast<std::uint8_t>(((v_tuner)->v_calibrate) & (v_tempCal)) != 0);
+std::int64_t v_age = (v_demod)->v_now().Sub((v_board)->v_temperatureLast);
+if (((((((v_board)->v_reuseTemperature && (v_board)->v_temperatureValid) && (v_band == v_bandUHF)) && (v_age >= 0)) && (v_age < Mul<std::int64_t>(10,INT64_C(1000000000)))) && v_needsTemperature))
+{
+(v_tuner)->v_calibrate = static_cast<std::uint8_t>((v_tuner)->v_calibrate & ~(v_tempCal));
+(v_board)->v_temperatureLastReused = true;
+}
 {
 Error v_err = m_tuner_setParams(v_tuner);
 if ((v_err != nullptr))
 {
+(v_board)->v_temperatureValid = false;
+((v_board)->v_tuner)->v_capMemory = std::array<T_capMemoryEntry, 64>{{}};
 return v_err;
 }
+}
+if ((v_needsTemperature && static_cast<bool>(!((v_board)->v_temperatureLastReused))))
+{
+(v_board)->v_temperatureLast = (v_demod)->v_now();
+(v_board)->v_temperatureValid = true;
 }
 if (((v_c)->v_bandwidthHz != 6000000))
 {
@@ -1936,6 +2010,10 @@ return v_u;
 std::int64_t m_tuner_getOffset(T_tuner* v_state)
 {
 std::int64_t v_ret = Mul<std::int64_t>(v_internWait,10);
+if ((v_state)->v_fastDC)
+{
+v_ret = 50;
+}
 {
 auto switch19 = (v_state)->v_tuneState;
 do {
@@ -2154,8 +2232,21 @@ std::uint16_t v_lo4 = static_cast<std::uint16_t>(0xe900);
 auto switch22 = (v_state)->v_tuneState;
 do {
 if ((switch22 == v_tunerStart)) {
+(v_state)->v_capLastReused = false;
+(v_state)->v_capRejected = false;
 m_tuner_writeReg(v_state,0x10,0x2B1);
 m_tuner_writeReg(v_state,0x1e,0x0032);
+std::int64_t v_slot = static_cast<std::int64_t>(static_cast<std::uint32_t>(((static_cast<std::uint32_t>(((v_state)->v_rfRequest) / (6000)))) % (64)));
+T_capMemoryEntry v_saved = At((v_state)->v_capMemory,v_slot);
+if (((((((v_state)->v_reuseCaptrim && (((v_state)->v_identity).v_p1g == 0)) && ((v_state)->v_currentBand == v_bandUHF)) && (v_saved).v_valid) && ((v_saved).v_frequency == (v_state)->v_rfRequest)) && ((v_saved).v_cap >= 0)))
+{
+(v_state)->v_currentRF = (v_state)->v_rfRequest;
+(v_state)->v_captrim = (v_saved).v_cap;
+(v_state)->v_fcaptrim = (v_saved).v_cap;
+m_tuner_writeReg(v_state,0x18,static_cast<std::uint16_t>((v_lo4) | (static_cast<std::uint16_t>((v_saved).v_cap))));
+(v_state)->v_tuneState = v_tunerStep4;
+return 25;
+}
 if (((v_state)->v_tunerIsTuned == 0))
 {
 if ((((v_state)->v_identity).v_p1g == 0))
@@ -2245,7 +2336,40 @@ else if ((switch22 == v_tunerStep2)) {
 m_tuner_writeReg(v_state,0x18,static_cast<std::uint16_t>((v_lo4) | (static_cast<std::uint16_t>((v_state)->v_fcaptrim))));
 (v_state)->v_tuneState = v_tunerStep3;
 }
+else if ((switch22 == v_tunerStep4)) {
+std::int64_t v_slot = static_cast<std::int64_t>(static_cast<std::uint32_t>(((static_cast<std::uint32_t>(((v_state)->v_rfRequest) / (6000)))) % (64)));
+std::int64_t v_adc = static_cast<std::int64_t>(m_tuner_getSlowADCVal(v_state));
+std::int64_t v_target = 200;
+if (((v_state)->v_rest != 0))
+{
+v_target = 400;
+}
+std::int64_t v_difference = Sub<std::int64_t>(v_adc,v_target);
+if ((v_difference < 0))
+{
+v_difference = Neg<std::int64_t>(v_difference);
+}
+(v_state)->v_capObserved = static_cast<std::int16_t>(v_difference);
+if ((((v_adc >= 0) && (v_adc <= 1023)) && (v_difference <= Add<std::int64_t>(static_cast<std::int64_t>((At((v_state)->v_capMemory,v_slot)).v_difference),10))))
+{
+(v_state)->v_capLastReused = true;
+(v_state)->v_tuneState = v_tunerStep3;
+}
+else
+{
+(At((v_state)->v_capMemory,v_slot)).v_valid = false;
+(v_state)->v_capRejected = true;
+(v_state)->v_tunerIsTuned = 0;
+(v_state)->v_tuneState = v_tunerStart;
+}
+return 0;
+}
 else if ((switch22 == v_tunerStep3)) {
+if ((((((v_state)->v_reuseCaptrim && (((v_state)->v_identity).v_p1g == 0)) && ((v_state)->v_currentBand == v_bandUHF)) && static_cast<bool>(!((v_state)->v_capLastReused))) && (((v_state)->v_failure)->v_err == nullptr)))
+{
+std::int64_t v_slot = static_cast<std::int64_t>(static_cast<std::uint32_t>(((static_cast<std::uint32_t>(((v_state)->v_rfRequest) / (6000)))) % (64)));
+At((v_state)->v_capMemory,v_slot) = [&]() { T_capMemoryEntry value{}; value.v_frequency = (v_state)->v_rfRequest; value.v_cap = (v_state)->v_fcaptrim; value.v_difference = (v_state)->v_adcDiff; value.v_valid = true; return value; }();
+}
 (v_state)->v_calibrate = static_cast<std::uint8_t>((v_state)->v_calibrate & ~(v_captrimCal));
 (v_state)->v_tuneState = v_tunerStep0;
 }
@@ -2553,12 +2677,20 @@ Error m_tuner_setParams(T_tuner* v_state)
 (v_state)->v_tuneState = v_tunerStart;
 for (;true;)
 {
+bool v_dcActive = ((v_state)->v_fastDC && (static_cast<std::uint8_t>(((v_state)->v_calibrate) & (v_dcCal)) != 0));
 std::uint32_t v_ret = m_tuner_tune(v_state);
 if (((v_ret == v_callbackTimeNever) || (((v_state)->v_failure)->v_err != nullptr)))
 {
 break;
 }
+if (v_dcActive)
+{
+v_ret = static_cast<std::uint32_t>((Mul<std::uint32_t>(5,(Add<std::uint32_t>(v_ret,49)))) / (50));
+}
+else
+{
 v_ret = static_cast<std::uint32_t>((Mul<std::uint32_t>(10,(Add<std::uint32_t>(v_ret,99)))) / (100));
+}
 m_tuner_msleep(v_state,static_cast<std::int64_t>(v_ret));
 if (((v_state)->v_tuneState == v_tunerStop))
 {
@@ -4170,7 +4302,7 @@ else
 }
 else if ((switch46 == v_demodStep10)) {
 v_locks = m_dib8000_readLock(v_state);
-if ((static_cast<std::uint16_t>((v_locks) & ((Shl<std::uint16_t>(1,(Sub<std::uint8_t>(7,(v_state)->v_longestIntlvLayer)))))) != 0))
+if (((static_cast<std::uint16_t>((v_locks) & ((Shl<std::uint16_t>(1,(Sub<std::uint8_t>(7,(v_state)->v_longestIntlvLayer)))))) != 0) || ((((v_state)->v_earlyData && (static_cast<std::uint16_t>((v_locks) & (0x1000)) != 0)) && (static_cast<std::uint16_t>((v_locks) & (0x00e0)) != 0)))))
 {
 (v_state)->v_status = v_statusDataLocked;
 (v_state)->v_tuneState = v_demodStop;
@@ -4384,7 +4516,12 @@ v_active = false;
 }
 if (v_active)
 {
-(v_state)->v_sleep(GoMax(v_callbackTime.Sub((v_state)->v_now()),v_minTuneStep));
+std::int64_t v_minimum = v_minTuneStep;
+if (((((((v_state)->v_fastPoll && ((v_state)->v_tuneState != v_demodStep4)) && ((v_state)->v_tuneState != v_demodStep5)) && ((v_state)->v_tuneState != v_demodStep6)) && ((v_state)->v_tuneState != v_demodStep7)) && ((v_state)->v_tuneState != v_demodStep8)))
+{
+v_minimum = Mul<std::int64_t>(3,INT64_C(1000000));
+}
+(v_state)->v_sleep(GoMax(v_callbackTime.Sub((v_state)->v_now()),v_minimum));
 }
 if ((((v_state)->v_failure)->v_err != nullptr))
 {
@@ -4593,6 +4730,77 @@ if ((((v_master)->v_deviceRevision > v_deviceDiB3000MC) && ((v_master)->v_select
 (v_master)->v_selectedInterface = v_intf;
 m_dib8000_writeWord((v_master)->v_demod,Add<std::uint16_t>((v_master)->v_baseRegister,4),v_intf);
 }
+}
+// Source: remembered.go
+Error m_Demod_tuneRemembered(T_Demod* v_board,std::uint32_t v_hz)
+{
+Error v_err{};
+((v_board)->v_failure).v_err = nullptr;
+(v_board)->v_memoryLastUsed = false;
+(v_board)->v_memoryFallback = false;
+if (((v_hz < v_minimumFrequencyHz) || (v_hz > v_maximumFrequencyHz)))
+{
+return MakeError("DiB8096: invalid memory frequency %d",v_hz);
+}
+std::int64_t v_slot = static_cast<std::int64_t>(static_cast<std::uint32_t>(((static_cast<std::uint32_t>((v_hz) / (6000000)))) % (64)));
+T_channel v_saved = At((v_board)->v_memory,v_slot);
+bool v_known = (((At((v_board)->v_memoryValid,v_slot) && ((v_saved).v_frequency == v_hz)) && ((v_saved).v_bandwidthHz == 6000000)) && v_isManualMode((&v_saved)));
+if ((v_board)->v_asleep)
+{
+m_dib8000_wakeup((v_board)->v_demod);
+m_tuner_wakeup((v_board)->v_tuner);
+(v_board)->v_asleep = false;
+}
+m_channel_clear((&(v_board)->v_channel));
+((v_board)->v_channel).v_frequency = v_hz;
+if (v_known)
+{
+(v_board)->v_channel = v_saved;
+(v_board)->v_memoryLastUsed = true;
+}
+std::int64_t v_budget = ((v_board)->v_demod)->v_tuneTimeout;
+Time v_deadline = ((v_board)->v_demod)->v_now().Add(v_budget);
+v_err = m_dib8000_setFrontend((v_board)->v_demod);
+if ((v_err != nullptr))
+{
+At((v_board)->v_memoryValid,v_slot) = false;
+return v_err;
+}
+if ((v_known && m_Demod_SearchFailed(v_board)))
+{
+At((v_board)->v_memoryValid,v_slot) = false;
+(v_board)->v_memoryFallback = true;
+std::int64_t v_remaining = v_deadline.Sub(((v_board)->v_demod)->v_now());
+if ((v_remaining <= 0))
+{
+return MakeError("DiB8096: remembered tune deadline expired");
+}
+((v_board)->v_demod)->v_tuneTimeout = v_remaining;
+m_channel_clear((&(v_board)->v_channel));
+((v_board)->v_channel).v_frequency = v_hz;
+v_err = m_dib8000_setFrontend((v_board)->v_demod);
+((v_board)->v_demod)->v_tuneTimeout = v_budget;
+if ((v_err != nullptr))
+{
+return v_err;
+}
+}
+if ((((v_board)->v_failure).v_err != nullptr))
+{
+At((v_board)->v_memoryValid,v_slot) = false;
+return ((v_board)->v_failure).v_err;
+}
+T_channel v_candidate = (v_board)->v_channel;
+if (((((v_board)->v_demod)->v_status == v_statusDataLocked) && v_isManualMode((&v_candidate))))
+{
+At((v_board)->v_memory,v_slot) = v_candidate;
+At((v_board)->v_memoryValid,v_slot) = true;
+}
+else
+{
+At((v_board)->v_memoryValid,v_slot) = false;
+}
+return nullptr;
 }
 // Source: tables.go
 // Source: tune_result.go

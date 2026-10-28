@@ -10,6 +10,10 @@ public:
     NativeFrontend(const NativeFrontend&)=delete;
     NativeFrontend& operator=(const NativeFrontend&)=delete;
     // 模擬バスでは時刻だけを置き換え、実機と同じ状態遷移を検証できる。
+    void ConfigureTuning(bool remember_channels,bool reuse_captrim,bool fast_tuning=false);
+    bool MemoryHit() const;
+    bool MemoryFallback() const;
+    bool CaptrimReused() const;
     void SetClock(std::function<dibnative::Time()> now);
     bool Command(std::uint8_t kind,const std::vector<std::uint8_t>& body,std::vector<std::uint8_t>& response);
     const std::string& Error() const noexcept {return error_;}

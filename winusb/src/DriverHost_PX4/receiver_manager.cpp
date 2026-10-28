@@ -1,6 +1,7 @@
 // receiver_manager.cpp
 
 #include "receiver_manager.hpp"
+#include "torne/receiver_selector.hpp"
 
 #include <random>
 
@@ -47,7 +48,7 @@ px4::ReceiverBase* ReceiverManager::SearchAndOpen(px4::command::ReceiverInfo &ke
 		    memcmp(&key.device_guid, &k.device_guid, sizeof(key.device_guid)))
 			continue;
 
-		if (key.receiver_name[0] && wcscmp(key.receiver_name, k.receiver_name))
+		if (key.receiver_name[0] && !px4::torne::MatchesReceiverName(key.receiver_name, k.receiver_name, k.device_guid))
 			continue;
 
 		if (memcmp(&key.receiver_guid, &empty_guid, sizeof(key.receiver_guid)) &&

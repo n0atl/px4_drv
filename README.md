@@ -91,6 +91,19 @@ torne 以外の機種では、同梱の `it930x-firmware.bin` も必要です。
 使用にあたり、特段 ini ファイルの設定変更などは必要ありません。ソフトウェアごとにチャンネルスキャンを行えばそのまま視聴できます。  
 なお、BonDriver の ini ファイル内の `DisplayErrorMessage` を 1 に設定すると、オリジナル同様にエラー発生時にメッセージボックスを表示します。
 
+torneをBonDriverごとに固定する場合は、BonDriver側の`[ReceiverDefinition0]`に`ReceiverName="[16桁の個体ID]"`を指定できます（更新後のDriverHostが必要）。
+名前の確認は、そのBonDriverの`[BonDriver]`で`DebugLog=true`にしてチューナーを開き、
+DLLと同名の`.log`に出る`OpenTuner: selected ... ReceiverName="..."`の値をコピーしてください。
+同じDLLを複数プロセスから使い、通常のログが使用中の場合は、2つ目以降は
+`BonDriver_Torne.<プロセスID>.log`へ記録します。選択結果の行にもPIDを表示します。
+DriverHost側のログを有効にする必要はありません。確認後は`DebugLog=false`に戻せます。
+
+torneの個体IDはUSB接続パスから生成した値で、本体の製造番号ではありません。
+同じUSBポート・ハブ構成では通常維持されますが、USBポートやハブ構成、ドライバーの変更などで
+接続パスが変わるとIDも変わる可能性があります。また、シリアル番号がないため、同じポートに
+別のtorneを差すと区別できない可能性があります。固定指定時は接続経路の変更後に名前を再確認してください。
+手順と設定例は[BonDriverごとのtorne個体指定](winusb/docs/cech-zd1j-integration.md#bondriverごとのtorne個体指定)を参照してください。
+
 ### 4. 内蔵 B-CAS カードリーダーの利用
 
 **v0.6.0 以降、winUSB 版 px4_drv 専用の WinSCard.dll を TVTest.exe や EpgDataCap_Bon.exe と同じフォルダに配置することで、内蔵カードリーダーが利用できるようになりました！**

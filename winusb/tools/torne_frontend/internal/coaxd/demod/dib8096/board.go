@@ -248,6 +248,17 @@ const defaultTuneTimeout = 5 * time.Second
 // Demod is a DiB8096 reached over an I2C bus. Not safe for concurrent use: a
 // caller sharing one between goroutines must serialise.
 type Demod struct {
+	reuseTemperature      bool
+	temperatureValid      bool
+	temperatureLast       time.Time
+	temperatureLastReused bool
+	// 保存値は個体のfrontend寿命内に限定し、Initializeで破棄する。
+	useMemory      bool
+	memory         [64]channel
+	memoryValid    [64]bool
+	memoryLastUsed bool
+	memoryFallback bool
+
 	failure failure
 	channel channel
 	demod   *dib8000
@@ -331,6 +342,13 @@ func (board *Demod) setTiming(now func() time.Time, sleep func(time.Duration), t
 // bridge must already have pulsed the chip's reset line and run the address
 // enumeration step (register 1287 = 3).
 func (board *Demod) Initialize() (err error) {
+	board.memoryValid = [64]bool{}
+	board.temperatureValid = false
+	board.temperatureLastReused = false
+	board.memoryLastUsed = false
+	board.memoryFallback = false
+	board.tuner.capLastReused = false
+	board.tuner.capMemory = [64]capMemoryEntry{}
 	defer board.flush(&err)
 	board.failure.err = nil
 
@@ -384,6 +402,9 @@ func (board *Demod) SetGPIO(pin uint8, high bool) (err error) {
 // locked or given up; Status tells which. Up to 170MHz (CBAND, VHF 1-3) the
 // gain is first found by the tuner's software AGC, see setParamOverride.
 func (board *Demod) Tune(frequencyHz uint32) (err error) {
+	if board.useMemory {
+		return board.tuneRemembered(frequencyHz)
+	}
 	defer board.flush(&err)
 	board.failure.err = nil
 
@@ -423,8 +444,22 @@ func (board *Demod) setParamOverride() error {
 		demod.setGPIO(3, 0, 1)
 	}
 
+	// 温度補償は同じ個体のUHFで10秒以内だけ再利用する。通信失敗で破棄する。
+	board.temperatureLastReused = false
+	needsTemperature := tuner.calibrate&tempCal != 0
+	age := demod.now().Sub(board.temperatureLast)
+	if board.reuseTemperature && board.temperatureValid && band == bandUHF && age >= 0 && age < 10*time.Second && needsTemperature {
+		tuner.calibrate &^= tempCal
+		board.temperatureLastReused = true
+	}
 	if err := tuner.setParams(); err != nil {
+		board.temperatureValid = false
+		board.tuner.capMemory = [64]capMemoryEntry{}
 		return err
+	}
+	if needsTemperature && !board.temperatureLastReused {
+		board.temperatureLast = demod.now()
+		board.temperatureValid = true
 	}
 
 	if c.bandwidthHz != 6000000 {

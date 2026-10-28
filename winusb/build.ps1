@@ -70,6 +70,11 @@ foreach ($build_platform in $build_platforms) {
     if ($LASTEXITCODE -ne 0) { throw "Native torne frontend test build failed. platform: $build_platform" }
     & "build/$build_platform/Release-static/torne_native_frontend_test.exe"
     if ($LASTEXITCODE -ne 0) { throw "Native torne frontend test failed. platform: $build_platform" }
+    # 個体ID省略記法が他機種の名前照合へ影響しないことを検証する。
+    msbuild tests/torne_receiver_selector_test.vcxproj /t:"Build" /p:"Configuration=Release-static;Platform=$build_platform;PlatformToolset=v143"
+    if ($LASTEXITCODE -ne 0) { throw "Receiver selector test build failed. platform: $build_platform" }
+    & "build/$build_platform/Release-static/torne_receiver_selector_test.exe"
+    if ($LASTEXITCODE -ne 0) { throw "Receiver selector test failed. platform: $build_platform" }
 }
 
 # dist/ フォルダにビルドされたファイルをコピー

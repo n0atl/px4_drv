@@ -8,6 +8,7 @@ namespace px4::torne {
 class NativeFrontendClient final : private dibnative::Bus {
 public:
     NativeFrontendClient(MailboxI2c& bus,HANDLE cancel):bus_(bus),cancel_(cancel),frontend_(*this){}
+    void ConfigureTuning(bool remember_channels,bool reuse_captrim,bool fast_tuning){frontend_.ConfigureTuning(remember_channels,reuse_captrim,fast_tuning);}
     bool Command(std::uint8_t kind,const std::vector<std::uint8_t>& body,std::vector<std::uint8_t>& response,
         std::chrono::steady_clock::time_point deadline);
     const std::string& Error() const noexcept{return error_;}
@@ -21,5 +22,9 @@ private:
     NativeFrontend frontend_;
     std::chrono::steady_clock::time_point deadline_{};
     std::string error_;
+    // コマンド単位の集計のみ保持し、USB要求や待機時間は変更しない。
+    std::uint64_t i2c_count_=0, wait_count_=0;
+    std::int64_t i2c_us_=0, wait_us_=0, requested_wait_ns_=0;
+
 };
 }

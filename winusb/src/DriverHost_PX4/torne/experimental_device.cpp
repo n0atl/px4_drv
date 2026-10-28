@@ -89,6 +89,15 @@ struct ExperimentalSession {
 		if (!healthy) return false;
 		const auto deadline = Clock::now() + std::chrono::seconds(8);
 		control.Begin(deadline);
+#ifndef PX4_TORNE_EXPERIMENTAL
+        // 正常な同一個体だけ再開する。失敗したセッションを成功扱いで使い回さない。
+        if(frontend_started){
+            std::vector<std::uint8_t> response;
+            const bool ok=frontend.Command(0x15,{},response,deadline) && response.empty();
+            if(!ok){healthy=false;bus.Invalidate();}
+            return ok;
+        }
+#endif
 		if (bootstrap.ResetDemodulator() != BootstrapResult::ok) return false;
 		if (registers.Write(1287, 3, deadline) != I2cResult::ok) return false;
 		std::uint16_t vendor = 0, chip = 0;
@@ -97,6 +106,8 @@ struct ExperimentalSession {
 #ifdef PX4_TORNE_EXPERIMENTAL
 		const auto helper = px4::util::path::GetDir() + L"TorneFrontendExperimental.exe";
 		if (!frontend_started && !frontend.Start(helper)) return false;
+#else
+        frontend.ConfigureTuning(true,true,true);
 #endif
 		frontend_started = true;
 		std::vector<std::uint8_t> response;
@@ -258,6 +269,9 @@ std::shared_ptr<ExperimentalSession> ExperimentalDevice::AcquireSession()
 	auto created = std::make_shared<ExperimentalSession>(usb_dev_.dev, usb_dev_.winusb, cancel_);
 	if (!created->InitializeBridge() || !available_) return {};
 	shared_session_ = created;
+#ifndef PX4_TORNE_EXPERIMENTAL
+    retained_session_=created;
+#endif
 	return created;
 }
 
@@ -356,6 +370,11 @@ protected:
 		if (!open_ || !parent_.available_) return -ENODEV;
 		if (params_.system != px4::SystemType::ISDB_T || params_.freq < 473143 || params_.freq > 767143 ||
 			(params_.bandwidth && params_.bandwidth != 6 && params_.bandwidth != 6000 && params_.bandwidth != 6000000)) return -EINVAL;
+		// 待ち時間の短縮は、停止・復調器・ロック確認・先頭TSを分けて実測して判断する。
+		const auto tune_begin = Clock::now();
+		auto elapsed_ms = [](Clock::time_point begin, Clock::time_point end) {
+			return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count());
+		};
 		tuned_ = false;
 		if (StopReader()) { failed_ = true; return -EIO; }
 		if (!stream_buf_->Purge()) return -EIO;
@@ -366,7 +385,9 @@ protected:
 		const auto hz = params_.freq * 1000u;
 		std::vector<std::uint8_t> frequency(4), response;
 		for (unsigned i = 0; i < 4; ++i) frequency[i] = static_cast<std::uint8_t>(hz >> (8 * i));
+		const auto demod_begin = Clock::now();
 		if (!session_->Command(0x11, frequency, response, deadline)) { failed_ = true; return -EIO; }
+		const auto demod_end = Clock::now();
 		if (IsConfirmedSearchFailure(response.data(), response.size())) {
 			failed_ = true;
 			msg_info("torne: confirmed search failure id=%s freq_khz=%u\n", parent_.id_.c_str(), params_.freq);
@@ -379,10 +400,15 @@ protected:
 			if (WaitForSingleObject(parent_.cancel_, 20) != WAIT_TIMEOUT) return -ECANCELED;
 		}
 		if (!locked) { failed_ = true; return -ETIMEDOUT; }
+		const auto lock_end = Clock::now();
 		tuned_ = true;
 		const int result = capture_ ? StartReader(deadline) : 0;
+		const auto stream_end = Clock::now();
 		if (result) failed_ = true;
-		msg_info("torne: tune id=%s freq_khz=%u result=%d\n", parent_.id_.c_str(), params_.freq, result);
+		msg_info("torne: tune id=%s freq_khz=%u result=%d capture=%d stop_ms=%lld demod_ms=%lld lock_check_ms=%lld stream_ready_ms=%lld total_ms=%lld\n",
+			parent_.id_.c_str(), params_.freq, result, capture_,
+			elapsed_ms(tune_begin, demod_begin), elapsed_ms(demod_begin, demod_end),
+			elapsed_ms(demod_end, lock_end), elapsed_ms(lock_end, stream_end), elapsed_ms(tune_begin, stream_end));
 		return result;
 	}
 private:
@@ -516,15 +542,7 @@ ExperimentalDevice::~ExperimentalDevice() { Term(); if (cancel_) CloseHandle(can
 int ExperimentalDevice::Init()
 {
 	output_error_packets_=px4::util::wtob(device_def_.configs.Get(L"OutputErrorPackets",L"false"));
-	// autoでは個体ごとに登録し、ReceiverManagerがOpen可能な受信機を選ぶ。
-	// 固定が必要な環境だけ、同じUSBポートのpath表示IDで絞り込む。
-	auto configured = device_def_.configs.Get(L"DeviceId", L"auto");
-	for (auto &character : configured)
-		if (character >= L'A' && character <= L'Z') character = static_cast<wchar_t>(character + (L'a' - L'A'));
-	if (!configured.empty() && configured != L"auto") {
-		std::string selected;
-		if (!NormalizeInterfaceId(std::string(configured.begin(), configured.end()), selected) || selected != id_) return -ENODEV;
-	}
+	// 接続個体をすべて登録し、BonDriverのReceiverNameで利用個体を選ぶ。
 	if (usb_dev_.descriptor.idVendor != 0x054c || usb_dev_.descriptor.idProduct != 0x04b2 || device_def_.receivers.size() != 1) return -EINVAL;
 	UCHAR alternate = 0xff;
 	USB_INTERFACE_DESCRIPTOR descriptor{};
@@ -557,6 +575,8 @@ void ExperimentalDevice::Term()
 	SetAvailability(false);
 	if (registered_) { receiver_manager_.Unregister(receiver_.get()); registered_ = false; }
 	if (receiver_) { receiver_->WaitClosed(); receiver_.reset(); }
+    // 抜去後のセッションを次のUSB個体へ持ち越さない。
+    {std::lock_guard<std::mutex> lock(session_mutex_);retained_session_.reset();}
 }
 void ExperimentalDevice::SetAvailability(bool available)
 {

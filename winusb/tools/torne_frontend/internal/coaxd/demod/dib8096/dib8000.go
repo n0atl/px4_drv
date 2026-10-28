@@ -87,9 +87,11 @@ const (
 // dib8000 is struct dib8000_state for the single frontend of a DiB8096. The
 // diversity slaves Linux keeps in fe[1..] do not exist on this board.
 type dib8000 struct {
-	bus     i2c.Bus
-	address byte
-	failure *failure
+	earlyData bool
+	fastPoll  bool
+	bus       i2c.Bus
+	address   byte
+	failure   *failure
 
 	cfg     dib8000Config
 	master  i2cMaster

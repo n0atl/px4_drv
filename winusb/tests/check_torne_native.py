@@ -41,7 +41,10 @@ if result.returncode:
     print(log.read_text(encoding='cp932',errors='replace')[-14000:]);raise SystemExit(result.returncode)
 subprocess.run([str(exe)],check=True,timeout=15)
 failed=False
-for mode in ('locked','nosignal','timeout','unknown','iofail','waitfail','cband'):
+modes=['locked','nosignal','timeout','unknown','iofail','waitfail','cband']
+if os.environ.get('TORNE_TEST_CHANNEL_MEMORY')=='1':modes.append('remembered')
+if os.environ.get('TORNE_TEST_CHANNEL_MEMORY')=='1' and os.environ.get('TORNE_TEST_CAPTRIM_REUSE')=='1':modes.append('capremembered')
+for mode in modes:
     target=build/(mode+'.cpp.trace')
     subprocess.run([str(exe),mode,str(target)],check=True,timeout=15)
     expected=(build/(mode+'.go.trace')).read_text().splitlines()
