@@ -11,7 +11,7 @@ Class       = Media
 ClassGuid   = {4D36E96C-E325-11CE-BFC1-08002BE10318}
 Provider    = %ProviderName%
 CatalogFile = px4_drv_winusb.cat
-DriverVer   = 10/27/2026,1.0.0.1
+DriverVer   = 10/29/2026,1.0.0.2
 
 [Manufacturer]
 %ManufacturerName% = DeviceList,NTamd64,NTarm64
@@ -25,6 +25,7 @@ DriverVer   = 10/27/2026,1.0.0.1
 [WinUSBInstall]
 Include = winusb.inf
 Needs   = WINUSB.NT
+AddProperty = DeviceSetup.AddProperty
 
 [WinUSBInstall.Services]
 Include = winusb.inf
@@ -35,6 +36,9 @@ AddReg = DeviceInterfaceGUID
 
 [DeviceInterfaceGUID]
 HKR,,DeviceInterfaceGUIDs,0x10000,"{B8F4B677-E19A-4BEB-A60C-C0A7AC2D0F6B}"
+
+[DeviceSetup.AddProperty]
+{afd97640-86a3-4210-b67c-289c41aabe55},3,0x00000011,,0   ;DEVPKEY_Device_SafeRemovalRequiredOverride=FALSE
 
 [Strings]
 ProviderName     = "px4_drv (coax-derived)"
