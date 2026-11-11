@@ -123,6 +123,16 @@ namespace command {
 		UNDEFINED = 0,
 		SIGNAL_STRENGTH,
 		CNR,
+		// RS 復号前の BER x 1e7。ISDB-T は A/B/C 階層、ISDB-S は A が高階層、B が低階層。
+		BER_A,
+		BER_B,
+		BER_C,
+		// RS 復号後のパケット誤り率 x 1e6。階層の対応は BER と同じ。
+		PER_A,
+		PER_B,
+		PER_C,
+		// ビタビ復号前の BER x 1e7 (ISDB-T のみの参考値、階層の区別なし)。
+		VBER,
 	};
 
 	struct Stat {

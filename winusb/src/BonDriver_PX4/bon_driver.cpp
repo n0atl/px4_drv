@@ -1,6 +1,7 @@
 // bon_driver.cpp
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <map>
 #include <limits>
@@ -19,6 +20,16 @@
 #include "util.hpp"
 #include "msg.h"
 
+namespace {
+
+// PX4GetSignalStats() が参照する BonDriver。TVTest などは 1 プロセスで BonDriver を
+// 1 つだけ作成するため、最後に作成したインスタンスを対象にする。
+// 破棄中のインスタンスを参照しないよう、デストラクタはこのロックを取得して登録を外す。
+std::mutex g_signal_stats_mtx;
+px4::BonDriver *g_signal_stats_instance = nullptr;
+
+} // namespace
+
 namespace px4 {
 
 BonDriver::BonDriver() noexcept
@@ -36,6 +47,8 @@ BonDriver::BonDriver() noexcept
 	pipe_timeout_(2000),
 	tune_timeout_(5000),
 	initial_channel_(-1),
+	signal_level_stat_(px4::command::StatType::CNR),
+	tuned_system_(px4::SystemType::UNSPECIFIED),
 	ctrl_client_(nullptr),
 	data_pipe_(nullptr),
 	open_(FALSE),
@@ -53,6 +66,13 @@ BonDriver::BonDriver() noexcept
 
 BonDriver::~BonDriver()
 {
+	{
+		std::lock_guard<std::mutex> lock(g_signal_stats_mtx);
+
+		if (g_signal_stats_instance == this)
+			g_signal_stats_instance = nullptr;
+	}
+
 	CloseTuner();
 	Term();
 }
@@ -141,6 +161,38 @@ bool BonDriver::Init()
 			try {
 				initial_channel_ = px4::util::wtoi(bon_config.Get(L"InitialChannel"));
 			} catch (const std::out_of_range &) {}
+
+			// GetSignalLevel() は値を 1 つしか返せないため、どの統計値を返すかを選択させる。
+			{
+				static const struct {
+					const wchar_t *name;
+					px4::command::StatType type;
+				} signal_level_names[] = {
+					{ L"CNR", px4::command::StatType::CNR },
+					{ L"BER_A", px4::command::StatType::BER_A },
+					{ L"BER_B", px4::command::StatType::BER_B },
+					{ L"BER_C", px4::command::StatType::BER_C },
+					{ L"PER_A", px4::command::StatType::PER_A },
+					{ L"PER_B", px4::command::StatType::PER_B },
+					{ L"PER_C", px4::command::StatType::PER_C },
+					{ L"VBER", px4::command::StatType::VBER },
+				};
+				const std::wstring &signal_level = bon_config.Get(L"SignalLevel", L"CNR");
+				bool found = false;
+
+				for (const auto &n : signal_level_names) {
+					if (!_wcsicmp(signal_level.c_str(), n.name)) {
+						signal_level_stat_ = n.type;
+						found = true;
+						break;
+					}
+				}
+
+				if (!found) {
+					msg_err("Init: unknown SignalLevel\n");
+					return false;
+				}
+			}
 		} else {
 			systems_ = px4::SystemType::ISDB_T;
 			driver_host_path_ = dir_path + L"DriverHost_PX4.exe";
@@ -423,6 +475,7 @@ void BonDriver::CloseTuner()
 
 	space_ = 0;
 	ch_ = 0;
+	tuned_system_ = px4::SystemType::UNSPECIFIED;
 
 	open_ = FALSE;
 
@@ -444,13 +497,126 @@ const float BonDriver::GetSignalLevel(void)
 	px4::command::StatSet stat_set;
 
 	stat_set.num = 1;
-	stat_set.data[0].type = px4::command::StatType::CNR;
+	stat_set.data[0].type = signal_level_stat_;
 	stat_set.data[0].value = 0;
+
+	switch (signal_level_stat_) {
+	case px4::command::StatType::BER_A:
+	case px4::command::StatType::BER_B:
+	case px4::command::StatType::BER_C:
+	case px4::command::StatType::PER_A:
+	case px4::command::StatType::PER_B:
+	case px4::command::StatType::PER_C:
+	case px4::command::StatType::VBER:
+		// 誤り率では 0 が「誤りなし」を意味するため、取得失敗や測定未完了は負の値で区別する。
+		if (!ctrl_client_.ReadStats(stat_set))
+			return -1.0f;
+
+		// 小数点以下 2 桁で表示するアプリケーションでも読めるよう、x 1e4 単位で返す。
+		// RS 復号前 BER の 2.00 (2e-4) は ARIB の準誤りなし (QEF) の目安に相当する。
+		if (signal_level_stat_ == px4::command::StatType::BER_A ||
+		    signal_level_stat_ == px4::command::StatType::BER_B ||
+		    signal_level_stat_ == px4::command::StatType::BER_C ||
+		    signal_level_stat_ == px4::command::StatType::VBER)
+			return static_cast<float>(stat_set.data[0].value) / 1000.0f;
+
+		return static_cast<float>(stat_set.data[0].value) / 100.0f;
+
+	default:
+		break;
+	}
 
 	if (!ctrl_client_.ReadStats(stat_set))
 		return 0.0f;
 
 	return static_cast<float>(stat_set.data[0].value) / 1000.0f;
+}
+
+bool BonDriver::GetSignalStats(Px4SignalStats &stats)
+{
+	static const struct {
+		px4::command::StatType type;
+		std::uint32_t valid;
+		bool is_ber;
+		std::size_t index;
+	} items[] = {
+		{ px4::command::StatType::BER_A, PX4_SIGNAL_STATS_VALID_BER_A, true, 0 },
+		{ px4::command::StatType::BER_B, PX4_SIGNAL_STATS_VALID_BER_B, true, 1 },
+		{ px4::command::StatType::BER_C, PX4_SIGNAL_STATS_VALID_BER_C, true, 2 },
+		{ px4::command::StatType::PER_A, PX4_SIGNAL_STATS_VALID_PER_A, false, 0 },
+		{ px4::command::StatType::PER_B, PX4_SIGNAL_STATS_VALID_PER_B, false, 1 },
+		{ px4::command::StatType::PER_C, PX4_SIGNAL_STATS_VALID_PER_C, false, 2 },
+	};
+
+	std::lock_guard<std::mutex> lock(mtx_);
+
+	if (!open_)
+		return false;
+
+	stats.valid = 0;
+	stats.cnr = 0;
+	for (std::size_t i = 0; i < 3; i++) {
+		stats.ber[i] = 0;
+		stats.per[i] = 0;
+	}
+	stats.vber = 0;
+
+	switch (tuned_system_) {
+	case px4::SystemType::ISDB_T:
+		stats.system = PX4_SIGNAL_SYSTEM_ISDB_T;
+		break;
+
+	case px4::SystemType::ISDB_S:
+		stats.system = PX4_SIGNAL_SYSTEM_ISDB_S;
+		break;
+
+	case px4::SystemType::ISDB_C:
+		stats.system = PX4_SIGNAL_SYSTEM_ISDB_C;
+		break;
+
+	default:
+		// 選局前や選局失敗後の値は、どのチャンネルの品質か判断できないため返さない。
+		stats.system = PX4_SIGNAL_SYSTEM_UNKNOWN;
+		return true;
+	}
+
+	px4::command::StatSet stat_set;
+
+	stat_set.num = 1;
+	stat_set.data[0].type = px4::command::StatType::CNR;
+	stat_set.data[0].value = 0;
+
+	if (ctrl_client_.ReadStats(stat_set)) {
+		stats.cnr = stat_set.data[0].value;
+		stats.valid |= PX4_SIGNAL_STATS_VALID_CNR;
+	}
+
+	// DriverHost_PX4 側で同じ測定値を短時間再利用するため、項目ごとに要求しても
+	// 復調器の読み出しは 1 回で済む。未対応の機種では各要求が失敗し、valid が立たない。
+	for (const auto &item : items) {
+		stat_set.num = 1;
+		stat_set.data[0].type = item.type;
+		stat_set.data[0].value = 0;
+
+		if (ctrl_client_.ReadStats(stat_set)) {
+			if (item.is_ber)
+				stats.ber[item.index] = stat_set.data[0].value;
+			else
+				stats.per[item.index] = stat_set.data[0].value;
+			stats.valid |= item.valid;
+		}
+	}
+
+	stat_set.num = 1;
+	stat_set.data[0].type = px4::command::StatType::VBER;
+	stat_set.data[0].value = 0;
+
+	if (ctrl_client_.ReadStats(stat_set)) {
+		stats.vber = stat_set.data[0].value;
+		stats.valid |= PX4_SIGNAL_STATS_VALID_VBER;
+	}
+
+	return true;
 }
 
 const DWORD BonDriver::WaitTsStream(const DWORD dwTimeOut)
@@ -732,8 +898,10 @@ const BOOL BonDriver::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 		// succeeded
 		space_ = dwSpace;
 		ch_ = dwChannel;
+		tuned_system_ = system;
 		msg_info("SetChannel: succeeded\n");
 	} else {
+		tuned_system_ = px4::SystemType::UNSPECIFIED;
 		msg_warn("SetChannel: failed (DriverHost rejected the tune or lock timed out)\n");
 	}
 
@@ -783,6 +951,11 @@ extern "C" IBonDriver* CreateBonDriver()
 			return nullptr;
 		}
 
+		{
+			std::lock_guard<std::mutex> lock(g_signal_stats_mtx);
+			g_signal_stats_instance = bon;
+		}
+
 		return bon;
 	} catch (const std::exception &e) {
 		MessageBoxA(nullptr, e.what(), "BonDriver_PX4 (CreateBonDriver)", MB_ICONERROR | MB_OK);
@@ -793,3 +966,34 @@ extern "C" IBonDriver* CreateBonDriver()
 	}
 }
 #pragma warning(default: 4273)
+
+// TVTest プラグインなどが C/N を GetSignalLevel() のまま表示しつつ、BER と PER を
+// 読み出すための入口。定義は px4_signal_stats.h を参照。
+static_assert(PX4_SIGNAL_STATS_MIN_SIZE == offsetof(Px4SignalStats, vber),
+	"PX4_SIGNAL_STATS_MIN_SIZE must match the layout before vber was added");
+
+extern "C" BOOL WINAPI PX4GetSignalStats(Px4SignalStats *stats)
+{
+	if (!stats || stats->size < PX4_SIGNAL_STATS_MIN_SIZE)
+		return FALSE;
+
+	try {
+		std::lock_guard<std::mutex> lock(g_signal_stats_mtx);
+
+		if (!g_signal_stats_instance)
+			return FALSE;
+
+		// 古い呼び出し側の構造体を越えて書き込まないよう、呼び出し側の大きさまでだけ写す。
+		Px4SignalStats full = {};
+		const uint32_t size = stats->size;
+
+		if (!g_signal_stats_instance->GetSignalStats(full))
+			return FALSE;
+
+		full.size = size;
+		std::memcpy(stats, &full, (std::min)(static_cast<std::size_t>(size), sizeof(full)));
+		return TRUE;
+	} catch (...) {
+		return FALSE;
+	}
+}

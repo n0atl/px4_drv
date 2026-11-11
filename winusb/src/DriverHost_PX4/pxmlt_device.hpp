@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <mutex>
 #include <condition_variable>
@@ -143,6 +144,12 @@ private:
 		cxd2858er_tuner cxd2858er_;
 		px4::SystemType current_system_;
 		bool streaming_;
+		// BER と PER は階層ごとに別の統計要求として届くため、同じ測定値を短時間再利用して
+		// 復調器への I2C 読み出しが要求の数だけ増えないようにする。選局時に破棄する。
+		cxd2856er_error_rate error_rate_;
+		std::chrono::steady_clock::time_point error_rate_time_;
+		int error_rate_ret_;
+		bool error_rate_valid_;
 	};
 
 	void LoadConfig();

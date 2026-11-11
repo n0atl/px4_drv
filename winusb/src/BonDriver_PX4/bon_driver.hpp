@@ -20,6 +20,7 @@
 #include "command.hpp"
 #include "cmd_client.hpp"
 #include "io_queue.hpp"
+#include "px4_signal_stats.h"
 
 namespace px4 {
 
@@ -37,6 +38,7 @@ public:
 
 	const BOOL SetChannel(const BYTE bCh) override;
 	const float GetSignalLevel(void) override;
+	bool GetSignalStats(Px4SignalStats &stats);
 
 	const DWORD WaitTsStream(const DWORD dwTimeOut = 0) override;
 	const DWORD GetReadyCount(void) override;
@@ -90,6 +92,8 @@ private:
 	std::uint32_t pipe_timeout_;
 	std::uint32_t tune_timeout_;
 	int initial_channel_;
+	px4::command::StatType signal_level_stat_;
+	px4::SystemType tuned_system_;
 	px4::CtrlCmdClient ctrl_client_;
 	std::unique_ptr<px4::PipeClient> data_pipe_;
 	BOOL open_;

@@ -1461,7 +1461,7 @@ int cxd2856er_read_cnr_raw_isdbs(struct cxd2856er_demod *demod, u16 *value)
 		return ret;
 
 	if (tmp[0] & 0x01)
-		*value = ((tmp[1] << 8) & 0x1f) | tmp[2];
+		*value = ((tmp[1] & 0x1f) << 8) | tmp[2];
 	else
 		*value = 0x5af;
 
@@ -1498,4 +1498,224 @@ unfreeze:
 	}
 
 	return ret;
+}
+
+/*
+ * (value * mul1 * mul2) / div を四捨五入して求める。
+ * 64bit 除算を持たない 32bit カーネルでも使えるよう、Sony の参照実装と同じく
+ * 2 段階に分けて除算する。呼び出し側は value * mul1 と (div - 1) * mul2 が
+ * 32bit に収まる値だけを渡す。
+ */
+static u32 cxd2856er_scaled_ratio(u32 value, u32 mul1, u32 mul2, u32 div)
+{
+	u32 q, r;
+
+	q = (value * mul1) / div;
+	r = (value * mul1) % div;
+	r *= mul2;
+	q = q * mul2 + r / div;
+	r %= div;
+
+	return (div > 1 && r >= div / 2) ? q + 1 : q;
+}
+
+static void cxd2856er_clear_error_rate(struct cxd2856er_error_rate *rate)
+{
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		rate->ber[i] = CXD2856ER_ERROR_RATE_INVALID;
+		rate->per[i] = CXD2856ER_ERROR_RATE_INVALID;
+	}
+	rate->vber = CXD2856ER_ERROR_RATE_INVALID;
+}
+
+int cxd2856er_read_error_rate_isdbt(struct cxd2856er_demod *demod,
+				    struct cxd2856er_error_rate *rate)
+{
+	int ret, unfreeze_ret, i;
+	u8 status, data[15], num[2], vber_act = 0, vber_cnt[2] = { 0 }, vber_sel = 0;
+	u32 packet_num, bit_error, packet_error, vber_period, vber_error;
+
+	cxd2856er_clear_error_rate(rate);
+
+	/*
+	 * BER、パケット誤り数、測定パケット数を同じ測定周期の値として読むため、
+	 * モニタ値を凍結してから読み出す。
+	 */
+	ret = cxd2856er_write_slvt_reg(demod, 0x01, 0x01);
+	if (ret)
+		return ret;
+
+	ret = cxd2856er_write_slvt_reg(demod, 0x00, 0x60);
+	if (ret)
+		goto unfreeze;
+
+	/* 0x10 bit1: IREG_DMDLOCK。未同期時の計数は意味を持たない。 */
+	ret = cxd2856er_read_slvt_reg(demod, 0x10, &status);
+	if (ret)
+		goto unfreeze;
+
+	if (!(status & 0x02)) {
+		ret = -EAGAIN;
+		goto unfreeze;
+	}
+
+	/*
+	 * 0x16-0x1e: IBER_BENUM_RS{A,B,C} (各 3 バイト、23bit)
+	 * 0x1f-0x24: IBER_PENUM_RS{A,B,C} (各 2 バイト、15bit)
+	 */
+	ret = cxd2856er_read_slvt_regs(demod, 0x16, data, sizeof(data));
+	if (ret)
+		goto unfreeze;
+
+	/* 0x5b-0x5c: OBER_CDUR_RSA (測定パケット数、15bit) */
+	ret = cxd2856er_read_slvt_regs(demod, 0x5b, num, sizeof(num));
+	if (ret)
+		goto unfreeze;
+
+	/*
+	 * ビタビ復号前の BER。Sony の資料では DVB-T 用とされる bank 0x10 のモニタで、
+	 * ISDB-T 受信中も信号品質に応じて計数することを実機で確認している。
+	 * 読み出しだけを行い、測定期間の設定は変更しない。
+	 * 0x39 bit0: IREG_VBER_ACT, 0x22-0x23: IREG_VBER_BITECNT,
+	 * 0x6f[2:0]: OREG_VBER_PERIOD_SEL
+	 */
+	ret = cxd2856er_write_slvt_reg(demod, 0x00, 0x10);
+	if (ret)
+		goto unfreeze;
+
+	ret = cxd2856er_read_slvt_reg(demod, 0x39, &vber_act);
+	if (ret)
+		goto unfreeze;
+
+	ret = cxd2856er_read_slvt_regs(demod, 0x22, vber_cnt, sizeof(vber_cnt));
+	if (ret)
+		goto unfreeze;
+
+	ret = cxd2856er_read_slvt_reg(demod, 0x6f, &vber_sel);
+
+unfreeze:
+	unfreeze_ret = cxd2856er_write_slvt_reg(demod, 0x01, 0x00);
+	if (!ret)
+		ret = unfreeze_ret;
+	if (ret)
+		return ret;
+
+	/* 期間は DVB-T の定義に従い、0 で 256 ビット、n で 4096 << n ビット。 */
+	vber_period = ((vber_sel & 0x07) == 0) ? 256 : (0x1000 << (vber_sel & 0x07));
+	vber_error = (vber_cnt[0] << 8) | vber_cnt[1];
+
+	/* VBER x 1e7 = vber_error * 1e7 / vber_period */
+	if ((vber_act & 0x01) && vber_error <= vber_period)
+		rate->vber = cxd2856er_scaled_ratio(vber_error, 3125, 25,
+						    vber_period / 128);
+
+	packet_num = ((num[0] & 0x7f) << 8) | num[1];
+	if (!packet_num)
+		return -EAGAIN;
+
+	for (i = 0; i < 3; i++) {
+		bit_error = ((data[i * 3] & 0x7f) << 16) |
+			    (data[i * 3 + 1] << 8) | data[i * 3 + 2];
+		packet_error = ((data[9 + i * 2] & 0x7f) << 8) |
+			       data[9 + i * 2 + 1];
+
+		/* BER x 1e7 = bit_error * 1e7 / (packet_num * 204 * 8) */
+		if (bit_error / 8 / 204 <= packet_num)
+			rate->ber[i] = cxd2856er_scaled_ratio(bit_error, 250,
+							      1250,
+							      packet_num * 51);
+
+		/* PER x 1e6 = packet_error * 1e6 / packet_num */
+		if (packet_error <= packet_num)
+			rate->per[i] = cxd2856er_scaled_ratio(packet_error,
+							      1000, 1000,
+							      packet_num);
+	}
+
+	return 0;
+}
+
+int cxd2856er_read_error_rate_isdbs(struct cxd2856er_demod *demod,
+				    struct cxd2856er_error_rate *rate)
+{
+	int ret, unfreeze_ret, i;
+	u8 status, illegal = 0;
+	u8 ber_h[3] = { 0 }, data[7] = { 0 }, low[4] = { 0 };
+	u32 bit_error[2], packet_error[2], slot_num[2];
+
+	cxd2856er_clear_error_rate(rate);
+
+	ret = cxd2856er_write_slvt_reg(demod, 0x01, 0x01);
+	if (ret)
+		return ret;
+
+	ret = cxd2856er_write_slvt_reg(demod, 0x00, 0xa0);
+	if (ret)
+		goto unfreeze;
+
+	/* 0x12 bit5: ITMCCLOCK。TMCC 未同期時は階層ごとの計数が無効になる。 */
+	ret = cxd2856er_read_slvt_reg(demod, 0x12, &status);
+	if (ret)
+		goto unfreeze;
+
+	if (!(status & 0x20)) {
+		ret = -EAGAIN;
+		goto unfreeze;
+	}
+
+	ret = cxd2856er_write_slvt_reg(demod, 0x00, 0xc0);
+	if (ret)
+		goto unfreeze;
+
+	/* 0x79 bit4: IRSILGL1 (高階層), bit3: IRSILGL2 (低階層)。1 で無効。 */
+	ret = cxd2856er_read_slvt_reg(demod, 0x79, &illegal);
+	if (ret)
+		goto unfreeze;
+
+	/* 0x50-0x52: IRSBIERR1 */
+	ret = cxd2856er_read_slvt_regs(demod, 0x50, ber_h, sizeof(ber_h));
+	if (ret)
+		goto unfreeze;
+
+	/* 0x56-0x57: IRSPKERR1, 0x58-0x59: IRSSLTNUM1, 0x5a-0x5c: IRSBIERR2 */
+	ret = cxd2856er_read_slvt_regs(demod, 0x56, data, sizeof(data));
+	if (ret)
+		goto unfreeze;
+
+	/* 0x60-0x61: IRSPKERR2, 0x62-0x63: IRSSLTNUM2 */
+	ret = cxd2856er_read_slvt_regs(demod, 0x60, low, sizeof(low));
+
+unfreeze:
+	unfreeze_ret = cxd2856er_write_slvt_reg(demod, 0x01, 0x00);
+	if (!ret)
+		ret = unfreeze_ret;
+	if (ret)
+		return ret;
+
+	bit_error[0] = ((ber_h[0] & 0x7f) << 16) | (ber_h[1] << 8) | ber_h[2];
+	packet_error[0] = (data[0] << 8) | data[1];
+	slot_num[0] = (data[2] << 8) | data[3];
+
+	bit_error[1] = ((data[4] & 0x7f) << 16) | (data[5] << 8) | data[6];
+	packet_error[1] = (low[0] << 8) | low[1];
+	slot_num[1] = (low[2] << 8) | low[3];
+
+	for (i = 0; i < 2; i++) {
+		if ((illegal & ((i == 0) ? 0x10 : 0x08)) || !slot_num[i])
+			continue;
+
+		/* BER x 1e7 = bit_error * 1e7 / (slot_num * 204 * 8) */
+		rate->ber[i] = cxd2856er_scaled_ratio(bit_error[i], 250, 1250,
+						      slot_num[i] * 51);
+
+		/* PER x 1e6 = packet_error * 1e6 / slot_num */
+		if (packet_error[i] <= slot_num[i])
+			rate->per[i] = cxd2856er_scaled_ratio(packet_error[i],
+							      1000, 1000,
+							      slot_num[i]);
+	}
+
+	return 0;
 }

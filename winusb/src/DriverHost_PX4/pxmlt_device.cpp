@@ -678,7 +678,11 @@ PxMltDevice::PxMltReceiver::PxMltReceiver(PxMltDevice &parent, std::uintptr_t in
 	close_cond_(),
 	lnb_power_(false),
 	current_system_(px4::SystemType::UNSPECIFIED),
-	streaming_(false)
+	streaming_(false),
+	error_rate_(),
+	error_rate_time_(),
+	error_rate_ret_(0),
+	error_rate_valid_(false)
 {
 	auto i2c_addr = parent_.params_[static_cast<int>(parent_.model_)][index_].i2c_addr;
 	auto i2c_bus = parent_.params_[static_cast<int>(parent_.model_)][index_].i2c_bus;
@@ -873,6 +877,7 @@ int PxMltDevice::PxMltReceiver::SetFrequency()
 		parent_.config_.device.discard_tsmf_header_packets);
 
 	current_system_ = px4::SystemType::UNSPECIFIED;
+	error_rate_valid_ = false;
 
 	switch (params_.system) {
 	case px4::SystemType::ISDB_T:
@@ -1007,6 +1012,8 @@ int PxMltDevice::PxMltReceiver::SetStreamId()
 
 	int ret = 0;
 	std::lock_guard<std::mutex> lock(lock_);
+
+	error_rate_valid_ = false;
 
 	if (params_.stream_id < 12) {
 		ret = cxd2856er_set_slot_isdbs(&cxd2856er_, params_.stream_id);
@@ -1173,6 +1180,68 @@ int PxMltDevice::PxMltReceiver::ReadStat(px4::command::StatType type, std::int32
 		}
 
 		break;
+
+	case px4::command::StatType::BER_A:
+	case px4::command::StatType::BER_B:
+	case px4::command::StatType::BER_C:
+	case px4::command::StatType::PER_A:
+	case px4::command::StatType::PER_B:
+	case px4::command::StatType::PER_C:
+	case px4::command::StatType::VBER:
+	{
+		const auto now = std::chrono::steady_clock::now();
+
+		// 1 回の表示更新で届く階層ごとの要求を 1 回の読み出しで賄える長さとして 500ms を使う。
+		if (!error_rate_valid_ || now - error_rate_time_ >= std::chrono::milliseconds(500)) {
+			switch (current_system_) {
+			case px4::SystemType::ISDB_T:
+				ret = cxd2856er_read_error_rate_isdbt(&cxd2856er_, &error_rate_);
+				break;
+
+			case px4::SystemType::ISDB_S:
+				ret = cxd2856er_read_error_rate_isdbs(&cxd2856er_, &error_rate_);
+				break;
+
+			default:
+				ret = -EINVAL;
+				break;
+			}
+
+			// 未同期などの失敗も同じ期間だけ再利用し、失敗時に読み出しが繰り返されないようにする。
+			error_rate_ret_ = ret;
+			error_rate_valid_ = true;
+			error_rate_time_ = now;
+		}
+
+		ret = error_rate_ret_;
+		if (ret)
+			break;
+
+		const cxd2856er_error_rate &rate = error_rate_;
+
+		std::uint32_t val;
+
+		if (type == px4::command::StatType::VBER) {
+			val = rate.vber;
+		} else {
+			const bool is_ber = (type == px4::command::StatType::BER_A ||
+					     type == px4::command::StatType::BER_B ||
+					     type == px4::command::StatType::BER_C);
+			const std::size_t layer = static_cast<std::size_t>(type) -
+				static_cast<std::size_t>(is_ber ? px4::command::StatType::BER_A : px4::command::StatType::PER_A);
+
+			val = (is_ber) ? rate.ber[layer] : rate.per[layer];
+		}
+
+		// 測定期間が満了していない値を 0 (誤りなし) と区別できるよう、失敗として返す。
+		if (val == CXD2856ER_ERROR_RATE_INVALID) {
+			ret = -EAGAIN;
+			break;
+		}
+
+		value = static_cast<std::int32_t>(val);
+		break;
+	}
 
 	default:
 		ret = -EINVAL;

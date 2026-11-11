@@ -1,3 +1,4 @@
 LIBRARY BonDriver_PX4
 EXPORTS
 	CreateBonDriver
+	PX4GetSignalStats

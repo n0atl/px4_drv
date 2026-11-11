@@ -71,6 +71,25 @@ struct cxd2856er_demod {
 	u32 isdbc_lock_checks;
 };
 
+/* 測定期間が満了していない階層や、存在しない階層に設定される値 */
+#define CXD2856ER_ERROR_RATE_INVALID	0xffffffff
+
+struct cxd2856er_error_rate {
+	/*
+	 * ISDB-T は A/B/C 階層、ISDB-S は [0] が高階層、[1] が低階層を示す。
+	 * ISDB-S の [2] は常に CXD2856ER_ERROR_RATE_INVALID。
+	 */
+	u32 ber[3];	/* 内符号復号後、RS 復号前の BER x 1e7 */
+	u32 per[3];	/* RS 復号後のパケット誤り率 x 1e6 */
+	/*
+	 * ビタビ復号前の BER x 1e7 (ISDB-T のみ、参考値)。
+	 * Sony の公開資料では DVB-T 用とされるモニタが ISDB-T 受信中も動作することを
+	 * 実機で確認して使っている。測定期間の設定に比例して計数が増えることは確認済みだが、
+	 * ISDB-T での期間の単位と対象階層は資料で確認できていない。
+	 */
+	u32 vber;
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -163,6 +182,10 @@ int cxd2856er_is_ts_locked_isdbc(struct cxd2856er_demod *demod, bool *locked);
 int cxd2856er_read_cnr_raw_isdbt(struct cxd2856er_demod *demod, u16 *value);
 int cxd2856er_read_cnr_raw_isdbs(struct cxd2856er_demod *demod, u16 *value);
 int cxd2856er_read_cnr_raw_isdbc(struct cxd2856er_demod *demod, u16 *value);
+int cxd2856er_read_error_rate_isdbt(struct cxd2856er_demod *demod,
+				    struct cxd2856er_error_rate *rate);
+int cxd2856er_read_error_rate_isdbs(struct cxd2856er_demod *demod,
+				    struct cxd2856er_error_rate *rate);
 #ifdef __cplusplus
 }
 #endif
