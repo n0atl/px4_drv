@@ -41,6 +41,12 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 		log_path = log_config.Get(L"DebugLogPath", log_path);
 	}
 
+	// BonDriverは作業ディレクトリを指定せずに起動するため、相対パスのままでは
+	// TVTestやEDCBの作業ディレクトリへ出力され、書き込めない場所では作成されない。
+	// INIの説明どおり、相対パスはDriverHost_PX4.exeのフォルダを基準にする。
+	if (log_path.size() < 2 || (log_path[1] != L':' && log_path[0] != L'\\' && log_path[0] != L'/'))
+		log_path = px4::util::path::GetDir() + log_path;
+
 	if (log_enabled && msg_open_file(log_path.c_str()))
 		msg_set_mode(static_cast<enum msg_mode>(MSG_MODE_DEBUGGER | MSG_MODE_LOG_FILE));
 	else
