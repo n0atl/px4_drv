@@ -42,5 +42,7 @@ private:
 	std::string id_;
 	bool registered_ = false;
 	bool output_error_packets_ = false;
+	// TS用bulk INは複数の転送を常に投入し、受信スレッドの遅延中もbridgeのFIFOを空ける。
+	unsigned int usb_transfer_size_ = 6144, usb_transfer_count_ = 16;
 };
 } // namespace px4::torne

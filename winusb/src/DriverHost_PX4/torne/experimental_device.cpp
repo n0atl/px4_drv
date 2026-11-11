@@ -22,8 +22,11 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <cstdint>
+#include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace px4::torne {
 using Clock = std::chrono::steady_clock;
@@ -36,19 +39,39 @@ struct Event {
 	Event &operator=(const Event &) = delete;
 };
 
-struct PendingRead {
-	PendingRead(HANDLE file_handle, WINUSB_INTERFACE_HANDLE usb_handle, HANDLE event)
-		: file(file_handle), usb(usb_handle) { operation.hEvent = event; }
-	~PendingRead()
+// TS用bulk INの1転送。投入中に破棄する場合は取消して完了を回収し、
+// bufferとOVERLAPPEDの寿命がWinUSBの処理より先に終わらないようにする。
+struct StreamTransfer {
+	StreamTransfer(HANDLE file_handle, WINUSB_INTERFACE_HANDLE usb_handle, std::size_t size)
+		: file(file_handle), usb(usb_handle), buffer(size) { operation.hEvent = complete.value; }
+	~StreamTransfer() { Collect(); }
+	StreamTransfer(const StreamTransfer &) = delete;
+	StreamTransfer &operator=(const StreamTransfer &) = delete;
+	// 投入に失敗した場合はWindowsのエラーを返す。
+	DWORD Submit()
 	{
-		if (active) {
-			CancelIoEx(file, &operation);
-			ULONG ignored = 0;
-			WinUsb_GetOverlappedResult(usb, &operation, &ignored, TRUE);
+		if (!ResetEvent(complete.value)) return GetLastError();
+		operation.Internal = operation.InternalHigh = 0;
+		operation.Offset = operation.OffsetHigh = 0;
+		if (!WinUsb_ReadPipe(usb, 0x81, buffer.data(), static_cast<ULONG>(buffer.size()), nullptr, &operation)) {
+			const DWORD error = GetLastError();
+			if (error != ERROR_IO_PENDING) return error;
 		}
+		active = true;
+		return 0;
+	}
+	void Collect()
+	{
+		if (!active) return;
+		CancelIoEx(file, &operation);
+		ULONG ignored = 0;
+		WinUsb_GetOverlappedResult(usb, &operation, &ignored, TRUE);
+		active = false;
 	}
 	HANDLE file;
 	WINUSB_INTERFACE_HANDLE usb;
+	Event complete;
+	std::vector<std::uint8_t> buffer;
 	OVERLAPPED operation{};
 	bool active = false;
 };
@@ -265,7 +288,19 @@ std::shared_ptr<ExperimentalSession> ExperimentalDevice::AcquireSession()
 	// 個体単位のbridgeを共有し、受信とカードがそれぞれbootstrapしない。
 	std::lock_guard<std::mutex> lock(session_mutex_);
 	if (!available_) return {};
-	if (auto current = shared_session_.lock()) return current;
+	if (auto current = shared_session_.lock()) {
+		bool healthy = false;
+		{ std::lock_guard<std::mutex> control(current->control_mutex); healthy = current->healthy; }
+		if (healthy) return current;
+		// 通信に失敗したセッションは以後の命令をすべて拒否する。保持したままだと
+		// TVTestを閉じても同じセッションが再利用され、認識はしているのに選局できなくなる。
+		// 保持をやめ、他(カード)が使っていなければbridgeから初期化し直す。
+		// まだ使われている間は同じ個体のbridgeを二重に初期化しないよう、作り直さない。
+#ifndef PX4_TORNE_EXPERIMENTAL
+		if (retained_session_ == current) retained_session_.reset();
+#endif
+		if (current.use_count() > 1) return {};
+	}
 	auto created = std::make_shared<ExperimentalSession>(usb_dev_.dev, usb_dev_.winusb, cancel_);
 	if (!created->InitializeBridge() || !available_) return {};
 	shared_session_ = created;
@@ -438,11 +473,15 @@ private:
 	}
 	void ReadLoop(Clock::time_point start_deadline) noexcept
 	{
-		Event complete;
+		// 他のPX系の受信スレッドと同じ優先度にする。通常優先度ではブラウザーなどの
+		// 負荷で完了処理と再投入が遅れ、bridgeのFIFOが溢れてTSが欠落する。
+		if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL))
+			msg_warn("torne: SetThreadPriority(TIME_CRITICAL) failed (%lu)\n", GetLastError());
 		StreamFramer framer(parent_.output_error_packets_);
 		TsQuality quality;
-		std::array<std::uint8_t, 6144> raw{};
+		std::vector<std::unique_ptr<StreamTransfer>> transfers;
 		std::vector<std::uint8_t> output;
+		std::uint64_t overflow_packets = 0, overflow_events = 0;
 		bool prepared = false, running = false;
 		try {
 			{
@@ -450,49 +489,67 @@ private:
 				session_->control.Begin(start_deadline);
 				prepared = session_->engine.Prepare() == StreamResult::ok;
 			}
-			if (!prepared || !complete.value || !WinUsb_ResetPipe(parent_.usb_dev_.winusb, 0x81)) worker_error_ = ERROR_GEN_FAILURE;
+			if (!prepared || !WinUsb_ResetPipe(parent_.usb_dev_.winusb, 0x81)) worker_error_ = ERROR_GEN_FAILURE;
+			// 1本だけの転送では、完了から再投入までの間にbridgeから受け取る先がなくなる。
+			// 複数を常に投入しておき、受信スレッドが一時的に遅れても取りこぼさないようにする。
+			for (unsigned int i = 0; i < parent_.usb_transfer_count_ && !worker_error_; ++i) {
+				auto transfer = std::make_unique<StreamTransfer>(parent_.usb_dev_.dev, parent_.usb_dev_.winusb, parent_.usb_transfer_size_);
+				if (!transfer->complete.value) { worker_error_ = ERROR_NOT_ENOUGH_MEMORY; break; }
+				if (const DWORD error = transfer->Submit()) { worker_error_ = error; break; }
+				transfers.push_back(std::move(transfer));
+			}
+			// bridgeの出力開始は受け取り先の転送を投入した後に行う。
+			if (!worker_error_) {
+				std::lock_guard<std::mutex> lock(session_->control_mutex);
+				session_->control.Begin(start_deadline);
+				running = session_->engine.Start() == StreamResult::ok;
+				if (!running) worker_error_ = ERROR_GEN_FAILURE;
+			}
+			// 投入順に完了を回収し、TSの順序を保つ。
+			std::size_t next = 0;
 			while (!worker_error_) {
 				if (WaitForSingleObject(stop_.value, 0) == WAIT_OBJECT_0 || !parent_.available_) break;
-				if (!ResetEvent(complete.value)) { worker_error_ = GetLastError(); break; }
-				PendingRead read(parent_.usb_dev_.dev, parent_.usb_dev_.winusb, complete.value);
-				const BOOL submitted = WinUsb_ReadPipe(parent_.usb_dev_.winusb, 0x81, raw.data(), static_cast<ULONG>(raw.size()), nullptr, &read.operation);
-				const DWORD submit_error = submitted ? 0 : GetLastError();
-				if (!submitted && submit_error != ERROR_IO_PENDING) { worker_error_ = submit_error; break; }
-				read.active = true;
-				if (!running) {
-					std::lock_guard<std::mutex> lock(session_->control_mutex);
-					session_->control.Begin(start_deadline);
-					running = session_->engine.Start() == StreamResult::ok;
-					if (!running) worker_error_ = ERROR_GEN_FAILURE;
+				auto &transfer = *transfers[next];
+				const HANDLE events[]{stop_.value, parent_.cancel_, transfer.complete.value};
+				const DWORD waited = WaitForMultipleObjects(3, events, FALSE, 2000);
+				if (waited != WAIT_OBJECT_0 + 2) {
+					worker_error_ = waited == WAIT_TIMEOUT ? ERROR_TIMEOUT : waited == WAIT_FAILED ? GetLastError() : ERROR_OPERATION_ABORTED;
+					break;
 				}
-				DWORD waited = WAIT_OBJECT_0 + 2;
-				if (!submitted && !worker_error_) {
-					const HANDLE events[]{stop_.value, parent_.cancel_, complete.value};
-					waited = WaitForMultipleObjects(3, events, FALSE, 2000);
-					if (waited != WAIT_OBJECT_0 + 2) worker_error_ = waited == WAIT_TIMEOUT ? ERROR_TIMEOUT : waited == WAIT_FAILED ? GetLastError() : ERROR_OPERATION_ABORTED;
-				}
-				if (worker_error_) CancelIoEx(parent_.usb_dev_.dev, &read.operation);
 				ULONG transferred = 0;
-				const BOOL collected = WinUsb_GetOverlappedResult(parent_.usb_dev_.winusb, &read.operation, &transferred, TRUE);
-				read.active = false;
-				if (!collected && !worker_error_) worker_error_ = GetLastError();
-				if (worker_error_) break;
-				if (transferred > raw.size()) { worker_error_ = ERROR_INVALID_DATA; break; }
+				const BOOL collected = WinUsb_GetOverlappedResult(parent_.usb_dev_.winusb, &transfer.operation, &transferred, TRUE);
+				transfer.active = false;
+				if (!collected) { worker_error_ = GetLastError(); break; }
+				if (transferred > transfer.buffer.size()) { worker_error_ = ERROR_INVALID_DATA; break; }
 				output.clear();
-				framer.Feed(raw.data(), transferred, output);
+				framer.Feed(transfer.buffer.data(), transferred, output);
+				// 内容を取り出した後すぐに再投入し、TS配信の処理時間を転送の空白にしない。
+				if (const DWORD error = transfer.Submit()) worker_error_ = error;
+				bool overflowed = false;
 				for (std::size_t offset = 0; offset < output.size(); offset += 188) {
 					quality.Feed(output.data() + offset);
+					if (overflowed) { ++overflow_packets; continue; }
 					std::size_t count = 188;
-					if (!stream_buf_->Write(output.data() + offset, count) || count != 188) { worker_error_ = ERROR_BUFFER_OVERFLOW; break; }
+					if (!stream_buf_->Write(output.data() + offset, count) || count != 188) {
+						// 利用側が読み出しを止めている間は書けない分を捨てて受信を続ける。
+						// 他のPX系と同じ扱いで、受信を止めると録画が復帰しなくなる。
+						overflowed = true;
+						++overflow_packets;
+					}
 				}
+				if (overflowed && (overflow_events++ % 64) == 0)
+					msg_warn("torne: stream buffer full id=%s dropped_packets=%llu\n", parent_.id_.c_str(), static_cast<unsigned long long>(overflow_packets));
 				stream_buf_->NotifyWrite();
-				if (!output.empty() && !worker_error_) {
+				if (!output.empty()) {
 					{ std::lock_guard<std::mutex> state(state_mutex_); first_ = true; }
 					changed_.notify_all();
 				}
+				next = (next + 1) % transfers.size();
 			}
 		} catch (...) { worker_error_ = ERROR_NOT_ENOUGH_MEMORY; }
-		// readのOVERLAPPEDを回収した後だけbridgeを停止し、次の選局とbuffer再利用を許可する。
+		// readのOVERLAPPEDをすべて回収した後だけbridgeを停止し、次の選局とbuffer再利用を許可する。
+		for (auto &transfer : transfers) transfer->Collect();
+		transfers.clear();
 		{
 			std::lock_guard<std::mutex> lock(session_->control_mutex);
 			session_->control.Begin(Clock::now() + std::chrono::seconds(2));
@@ -501,8 +558,9 @@ private:
 		}
 		{ std::lock_guard<std::mutex> state(state_mutex_); finished_ = true; }
 		changed_.notify_all();
-		msg_info("torne: reader end id=%s error=%lu stop_ok=%d packets=%llu tei=%llu discarded=%llu raw_cc=%llu raw_malformed=%llu scrambled=%llu\n",
-			parent_.id_.c_str(), worker_error_, worker_stop_ok_, static_cast<unsigned long long>(framer.Packets()),
+		msg_info("torne: reader end id=%s error=%lu stop_ok=%d buffer_full_dropped=%llu packets=%llu tei=%llu discarded=%llu raw_cc=%llu raw_malformed=%llu scrambled=%llu\n",
+			parent_.id_.c_str(), worker_error_, worker_stop_ok_, static_cast<unsigned long long>(overflow_packets),
+			static_cast<unsigned long long>(framer.Packets()),
 			static_cast<unsigned long long>(framer.TeiPackets()), static_cast<unsigned long long>(framer.DiscardedBytes()),
 			static_cast<unsigned long long>(quality.cc_anomalies), static_cast<unsigned long long>(quality.malformed), static_cast<unsigned long long>(quality.scrambled));
 	}
@@ -542,6 +600,28 @@ ExperimentalDevice::~ExperimentalDevice() { Term(); if (cancel_) CloseHandle(can
 int ExperimentalDevice::Init()
 {
 	output_error_packets_=px4::util::wtob(device_def_.configs.Get(L"OutputErrorPackets",L"false"));
+	// TS受信のUSB転送は他のPX系と同じUrbMaxPackets(1転送のTSパケット数)とMaxUrbs(同時投入数)で指定する。
+	// UrbMaxPacketsが無ければXferPacketsを使う。torneのbridgeには別の転送単位が無いため、どちらも1転送の長さになる。
+	// bulkの最大パケット長512の倍数でないと転送の途中で短いパケットとして完了するため、512の倍数へ切り下げる。
+	// TSは転送の境界をまたいでもStreamFramerで組み直すので、188の倍数である必要はない。
+	// 旧名のUsbTransferSize(バイト数)とUsbTransferCountが書かれていれば、移行期間はそちらを優先する。
+	{
+		const auto &configs=device_def_.configs;
+		constexpr std::uint32_t default_size=6144, default_count=16, max_size=1048576;
+		std::uint32_t size=default_size;
+		if (configs.Exists(L"UsbTransferSize")) {
+			size=px4::util::wtoui32(configs.Get(L"UsbTransferSize"));
+		} else if (configs.Exists(L"UrbMaxPackets") || configs.Exists(L"XferPackets")) {
+			const auto packets=px4::util::wtoui32(configs.Get(configs.Exists(L"UrbMaxPackets")?L"UrbMaxPackets":L"XferPackets"));
+			size=(packets>0 && packets<=max_size/188)?packets*188/512*512:0;
+		}
+		usb_transfer_size_=(size>=512 && size<=max_size && size%512==0)?size:default_size;
+		std::uint32_t count=default_count;
+		if (configs.Exists(L"UsbTransferCount")) count=px4::util::wtoui32(configs.Get(L"UsbTransferCount"));
+		else if (configs.Exists(L"MaxUrbs")) count=px4::util::wtoui32(configs.Get(L"MaxUrbs"));
+		usb_transfer_count_=(count>=1 && count<=64)?count:default_count;
+	}
+	msg_info("torne: config usb_xfer=%u x %u\n",usb_transfer_size_,usb_transfer_count_);
 	// 接続個体をすべて登録し、BonDriverのReceiverNameで利用個体を選ぶ。
 	if (usb_dev_.descriptor.idVendor != 0x054c || usb_dev_.descriptor.idProduct != 0x04b2 || device_def_.receivers.size() != 1) return -EINVAL;
 	UCHAR alternate = 0xff;

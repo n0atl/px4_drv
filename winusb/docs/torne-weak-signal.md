@@ -72,6 +72,32 @@ TVTestの映像・E表示と長時間運用は、この新版では別途確認�
 参考: [Linux dib8000.cの出力設定とSMO既定値](https://code.googlesource.com/linux/torvalds/linux/+/95940a04bfe8a4d246f4ca17c6a3b00148bdead0/drivers/media/dvb-frontends/dib8000.c)。
 レジスター切替の効果と既存動作への復帰はCECH-ZD1J実機の保存TSで比較した。
 
+## 低スペックPCでのDrop対策
+
+TS受信スレッドは6144byteのbulk転送を1本だけ投入し、完了のたびに再投入していた。
+通常優先度のため、ブラウザーなどの負荷で再投入が遅れると、その間bridgeの出力先がなくFIFOが溢れる。
+また、DriverHost内の受信バッファが満杯になると受信スレッド自体が停止していた。
+
+- 転送を複数（既定16本）同時に投入し、投入順に回収してTSの順序を保つ。
+- 受信スレッドを他のPX系と同じ`THREAD_PRIORITY_TIME_CRITICAL`にした。
+- 受信バッファが満杯の間は書けない分を捨てて受信を続け、件数を`buffer_full_dropped`としてログへ出す。
+  他のPX系と同じ扱い。
+
+```ini
+[DeviceDefinition15.Config]
+XferPackets=33
+UrbMaxPackets=33
+MaxUrbs=16
+```
+
+他の機種と同じ名前の設定で指定する。`UrbMaxPackets`（無ければ`XferPackets`）が1転送のTSパケット数、
+`MaxUrbs`が同時投入数。torneのbulk転送は512バイトの倍数でないと途中で完了するため、
+1転送の長さは`パケット数×188`を512の倍数へ切り下げる（33パケットで6144バイト、816パケットで153088バイト）。
+上限は1MiB、同時投入数は1～64。
+旧名の`UsbTransferSize`（バイト数）と`UsbTransferCount`は移行期間だけ読み、書かれていればそちらを優先する。
+
+Dropが残る場合は`MaxUrbs`を増やす。他の機種と同じ`816 / 816 / 5`（153088バイト×5本）でも、ブースターなしの環境の4台同時受信でDropがないことを確認した。
+
 ## 現在の配布既定値（2026-10-28）
 
 `BonDriver_Torne.ini`は1024パケット単位、最大64・最小4バッファ。
