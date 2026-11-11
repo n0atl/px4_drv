@@ -23,6 +23,7 @@ struct T_pllEntry;
 struct T_slope;
 struct T_tuner;
 struct T_tunerIdentity;
+struct T_tuneTiming;
 struct T_tuningEntry;
 struct T_wbdSlope;
 constexpr std::uint8_t v_Address = 18;
@@ -144,7 +145,11 @@ constexpr std::int64_t v_loopTune1 = 0;
 constexpr std::int64_t v_loopTune2 = 1;
 constexpr std::int64_t v_lpf = 100;
 constexpr std::int64_t v_maximumFrequencyHz = 860000000;
-constexpr std::int64_t v_minTuneStep = 10000000;
+constexpr std::int64_t v_minTuneStep = 100000000;
+constexpr std::int64_t v_tuneAttempts = 3;
+constexpr std::int64_t v_tuneRetryPause = 100000000;
+constexpr std::int64_t v_tuneRetryMinimum = 1000000000;
+constexpr std::int64_t v_emptyNoiseLimit = 50;
 constexpr std::int64_t v_minimumFrequencyHz = 45000000;
 constexpr std::int64_t v_modulationDQPSK = 12;
 constexpr std::int64_t v_modulationQAM16 = 1;
@@ -249,6 +254,8 @@ std::array<T_channel, 64> v_memory{};
 std::array<bool, 64> v_memoryValid{};
 bool v_memoryLastUsed{};
 bool v_memoryFallback{};
+bool v_skipEmpty{};
+bool v_fresh{};
 T_failure v_failure{};
 T_channel v_channel{};
 T_dib8000* v_demod{};
@@ -576,6 +583,8 @@ std::array<T_channel, 64> v_memory{};
 std::array<bool, 64> v_memoryValid{};
 bool v_memoryLastUsed{};
 bool v_memoryFallback{};
+bool v_skipEmpty{};
+bool v_fresh{};
 T_failure v_failure{};
 T_channel v_channel{};
 T_dib8000* v_demod{};
@@ -660,6 +669,20 @@ std::uint8_t v_fRefClockRatio{};
 Slice<T_wbdSlope> v_wbd{};
 std::uint8_t v_forceCrystalMode{};
 };
+// Source: dib8000.go (tuneTiming)
+struct T_tuneTiming {
+std::int64_t v_acquisitions{};
+std::int64_t v_tuner{};
+std::int64_t v_agc{};
+std::int64_t v_search{};
+std::int64_t v_sync{};
+std::int64_t v_failures{};
+std::array<std::uint16_t, 3> v_failNoise{};
+std::array<std::uint16_t, 3> v_failBER{};
+bool v_noSignal{};
+bool v_skipped{};
+bool v_fresh{};
+};
 struct T_dib8000 {
 bool v_earlyData{};
 bool v_fastPoll{};
@@ -700,6 +723,7 @@ std::function<void(std::uint8_t)> v_agcControl{};
 std::function<void(std::int64_t)> v_sleep{};
 std::function<Time()> v_now{};
 std::int64_t v_tuneTimeout{};
+T_tuneTiming v_timing{};
 };
 struct T_linearSegment {
 std::uint32_t v_x{};
@@ -896,6 +920,7 @@ void m_dib8000_setSyncWait(T_dib8000* v_state);
 Time m_dib8000_getTimeout(T_dib8000* v_state,std::uint32_t v_delay,bool v_symbolDependent);
 std::uint16_t m_dib8000_readLock(T_dib8000* v_state);
 bool v_isManualMode(T_channel* v_c);
+bool v_inAutosearch(std::int64_t v_tuneState);
 std::int64_t m_dib8000_tune(T_dib8000* v_state);
 void m_dib8000_getFrontend(T_dib8000* v_state);
 Error m_dib8000_setFrontend(T_dib8000* v_state);
@@ -912,6 +937,7 @@ std::uint16_t m_i2cMaster_gateControl(T_i2cMaster* v_master,std::uint8_t v_addre
 void m_i2cMaster_selectInterface(T_i2cMaster* v_master,std::uint16_t v_intf);
 Error m_Demod_tuneRemembered(T_Demod* v_board,std::uint32_t v_hz);
 bool m_Demod_SearchFailed(T_Demod* v_board);
+bool m_Demod_searchFoundNothing(T_Demod* v_board);
 void m_dib8000_modifyWord(T_dib8000*, std::uint16_t, std::uint16_t, std::uint16_t);
 Slice<T_agcConfig> v_dib8090AGCConfig = Slice<T_agcConfig>{[&]() { T_agcConfig value{}; value.v_bandCaps = static_cast<std::uint8_t>((static_cast<std::uint8_t>((static_cast<std::uint8_t>((v_bandUHF) | (v_bandVHF))) | (v_bandLBand))) | (v_bandSBand)); value.v_setup = static_cast<std::uint16_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((Shl<std::int64_t>(0,15)) | (Shl<std::int64_t>(0,14)))) | (Shl<std::int64_t>(5,11)))) | (Shl<std::int64_t>(0,10)))) | (Shl<std::int64_t>(0,9)))) | (Shl<std::int64_t>(0,8)))) | (Shl<std::int64_t>(3,5)))) | (Shl<std::int64_t>(0,4)))) | (Shl<std::int64_t>(5,1)))) | (Shl<std::int64_t>(0,0))); value.v_invGain = 787; value.v_timeStabiliz = 10; value.v_alphaLevel = 0; value.v_thlock = 118; value.v_wbdInv = 0; value.v_wbdRef = 3530; value.v_wbdSel = 1; value.v_wbdAlpha = 5; value.v_agc1Max = 65535; value.v_agc1Min = 0; value.v_agc2Max = 65535; value.v_agc2Min = 0; value.v_agc1Pt1 = 0; value.v_agc1Pt2 = 32; value.v_agc1Pt3 = 114; value.v_agc1Slope1 = 143; value.v_agc1Slope2 = 144; value.v_agc2Pt1 = 114; value.v_agc2Pt2 = 227; value.v_agc2Slope1 = 116; value.v_agc2Slope2 = 117; value.v_alphaMant = 28; value.v_alphaExp = 26; value.v_betaMant = 31; value.v_betaExp = 51; value.v_performAGCSoftsplit = 0; return value; }(),[&]() { T_agcConfig value{}; value.v_bandCaps = v_bandCBand; value.v_setup = static_cast<std::uint16_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((static_cast<std::int64_t>((Shl<std::int64_t>(0,15)) | (Shl<std::int64_t>(0,14)))) | (Shl<std::int64_t>(5,11)))) | (Shl<std::int64_t>(0,10)))) | (Shl<std::int64_t>(0,9)))) | (Shl<std::int64_t>(0,8)))) | (Shl<std::int64_t>(3,5)))) | (Shl<std::int64_t>(0,4)))) | (Shl<std::int64_t>(5,1)))) | (Shl<std::int64_t>(0,0))); value.v_invGain = 787; value.v_timeStabiliz = 10; value.v_alphaLevel = 0; value.v_thlock = 118; value.v_wbdInv = 0; value.v_wbdRef = 3530; value.v_wbdSel = 1; value.v_wbdAlpha = 5; value.v_agc1Max = 0; value.v_agc1Min = 0; value.v_agc2Max = 65535; value.v_agc2Min = 0; value.v_agc1Pt1 = 0; value.v_agc1Pt2 = 32; value.v_agc1Pt3 = 114; value.v_agc1Slope1 = 143; value.v_agc1Slope2 = 144; value.v_agc2Pt1 = 114; value.v_agc2Pt2 = 227; value.v_agc2Slope1 = 116; value.v_agc2Slope2 = 117; value.v_alphaMant = 28; value.v_alphaExp = 26; value.v_betaMant = 31; value.v_betaExp = 51; value.v_performAGCSoftsplit = 0; return value; }()};
 T_bandwidthConfig v_dib8090PLLConfig12MHz = [&]() { T_bandwidthConfig value{}; value.v_internal = 54000; value.v_sampling = 13500; value.v_pllPrediv = 1; value.v_pllRatio = 18; value.v_pllRange = 3; value.v_pllReset = 1; value.v_pllBypass = 0; value.v_enableRefdiv = 0; value.v_bypclkDiv = 0; value.v_ioClkEnCore = 1; value.v_adcClkSrc = 1; value.v_modulo = 2; value.v_sadCfg = static_cast<std::uint16_t>((static_cast<std::int64_t>((Shl<std::int64_t>(3,14)) | (Shl<std::int64_t>(1,12)))) | (Shl<std::int64_t>(599,0))); value.v_ifreq = static_cast<std::uint32_t>((Shl<std::int64_t>(0,25)) | (0)); value.v_timf = 20199727; value.v_xtalHz = 12000000; return value; }();
@@ -1006,6 +1032,7 @@ Error v_err{};
 (v_board)->v_memoryFallback = false;
 ((v_board)->v_tuner)->v_capLastReused = false;
 ((v_board)->v_tuner)->v_capMemory = std::array<T_capMemoryEntry, 64>{{}};
+(v_board)->v_fresh = true;
 ((v_board)->v_failure).v_err = nullptr;
 {
 Error v_err = m_dib8000_initialize((v_board)->v_demod);
@@ -1067,6 +1094,9 @@ return ((v_board)->v_failure).v_err;
 Error m_Demod_Tune(T_Demod* v_board,std::uint32_t v_frequencyHz)
 {
 Error v_err{};
+((v_board)->v_demod)->v_timing = T_tuneTiming{};
+((v_board)->v_demod)->v_timing.v_fresh = (v_board)->v_fresh;
+(v_board)->v_fresh = false;
 if ((v_board)->v_useMemory)
 {
 return m_Demod_tuneRemembered(v_board,v_frequencyHz);
@@ -1082,13 +1112,48 @@ m_dib8000_wakeup((v_board)->v_demod);
 m_tuner_wakeup((v_board)->v_tuner);
 (v_board)->v_asleep = false;
 }
+std::int64_t v_budget = ((v_board)->v_demod)->v_tuneTimeout;
+Time v_deadline = ((v_board)->v_demod)->v_now().Add(v_budget);
+for (std::int64_t v_attempt = 0;(v_attempt < v_tuneAttempts);v_attempt++)
+{
+if ((v_attempt != 0))
+{
+std::int64_t v_remaining = Sub<std::int64_t>(v_deadline.Sub(((v_board)->v_demod)->v_now()),v_tuneRetryPause);
+if ((v_remaining < v_tuneRetryMinimum))
+{
+break;
+}
+((v_board)->v_demod)->v_sleep(v_tuneRetryPause);
+if ((((v_board)->v_failure).v_err != nullptr))
+{
+return ((v_board)->v_failure).v_err;
+}
+((v_board)->v_demod)->v_tuneTimeout = v_remaining;
+}
 m_channel_clear((&(v_board)->v_channel));
 ((v_board)->v_channel).v_frequency = v_frequencyHz;
-{
 Error v_err = m_dib8000_setFrontend((v_board)->v_demod);
+((v_board)->v_demod)->v_tuneTimeout = v_budget;
 if ((v_err != nullptr))
 {
 return v_err;
+}
+if ((((v_board)->v_failure).v_err != nullptr))
+{
+return ((v_board)->v_failure).v_err;
+}
+if ((static_cast<bool>(!(m_Demod_SearchFailed(v_board))) && (static_cast<std::int64_t>((m_dib8000_readStatus((v_board)->v_demod)) & (v_feHasLock)) != 0)))
+{
+break;
+}
+if ((((v_board)->v_failure).v_err != nullptr))
+{
+return ((v_board)->v_failure).v_err;
+}
+// 信号がまったく無いチャンネルは何度探索しても見つからないため、再探索を省く。
+if ((m_Demod_SearchFailed(v_board) && m_Demod_searchFoundNothing(v_board)))
+{
+break;
 }
 }
 return ((v_board)->v_failure).v_err;
@@ -1289,6 +1354,7 @@ return v_err;
 }
 }
 (v_board)->v_asleep = true;
+(v_board)->v_fresh = true;
 return ((v_board)->v_failure).v_err;
 }
 // Source: dib0090.go
@@ -4039,6 +4105,12 @@ return m_dib8000_readWord(v_state,568);
 }
 // isManualMode is is_manual_mode: whether every parameter is known, so the
 // autosearch can be skipped. With only a frequency known it never is.
+// inAutosearch reports whether the demodulator is still before or inside the
+// FFT/guard search, the states setFrontend passes through until demodStep3.
+bool v_inAutosearch(std::int64_t v_tuneState)
+{
+return ((((v_tuneState == v_demodStart) || (v_tuneState == v_demodSearchNext)) || (v_tuneState == v_demodStep1)) || (v_tuneState == v_demodStep2));
+}
 bool v_isManualMode(T_channel* v_c)
 {
 std::int64_t v_nSegs = 0;
@@ -4455,6 +4527,8 @@ if ((v_err != nullptr))
 return v_err;
 }
 }
+((v_state)->v_timing).v_acquisitions++;
+Time v_phase = (v_state)->v_now();
 if (((v_state)->v_tunerSetParams != nullptr))
 {
 {
@@ -4465,6 +4539,9 @@ return v_err;
 }
 }
 }
+Time v_mark = (v_state)->v_now();
+((v_state)->v_timing).v_tuner += v_mark.Sub(v_phase);
+v_phase = v_mark;
 (v_state)->v_tuneState = v_agcStart;
 m_dib8000_setDiversityIn(v_state,0);
 for (;true;)
@@ -4485,6 +4562,10 @@ if ((((v_state)->v_failure)->v_err != nullptr))
 {
 return ((v_state)->v_failure)->v_err;
 }
+v_mark = (v_state)->v_now();
+((v_state)->v_timing).v_agc += v_mark.Sub(v_phase);
+v_phase = v_mark;
+bool v_searching = true;
 (v_state)->v_tuneState = v_demodStart;
 Time v_giveUp = (v_state)->v_now().Add((v_state)->v_tuneTimeout);
 bool v_active = true;
@@ -4497,6 +4578,13 @@ if ((v_delay != 0))
 {
 v_callbackTime = (v_state)->v_now().Add(Mul<std::int64_t>(Mul<std::int64_t>(static_cast<std::int64_t>(v_delay),100),INT64_C(1000)));
 v_haveCallback = true;
+}
+if ((v_searching && static_cast<bool>(!(v_inAutosearch((v_state)->v_tuneState)))))
+{
+v_mark = (v_state)->v_now();
+((v_state)->v_timing).v_search += v_mark.Sub(v_phase);
+v_phase = v_mark;
+v_searching = false;
 }
 if (((v_state)->v_channelParametersSet == 0))
 {
@@ -4531,6 +4619,15 @@ if ((v_active && (v_state)->v_now().After(v_giveUp)))
 {
 return MakeError("DiB8000: tune did not finish within %v (state %d)",(v_state)->v_tuneTimeout,(v_state)->v_tuneState);
 }
+}
+v_mark = (v_state)->v_now();
+if (v_searching)
+{
+((v_state)->v_timing).v_search += v_mark.Sub(v_phase);
+}
+else
+{
+((v_state)->v_timing).v_sync += v_mark.Sub(v_phase);
 }
 return m_dib8000_setOutputMode(v_state,((v_state)->v_cfg).v_outputMode);
 }
@@ -4766,15 +4863,50 @@ if ((v_err != nullptr))
 At((v_board)->v_memoryValid,v_slot) = false;
 return v_err;
 }
-if ((v_known && m_Demod_SearchFailed(v_board)))
+// Remembered parameters that no longer lock fall back to a full search at
+// once. A full search that fails is retried like Tune: at most
+// tuneAttempts searches, tuneRetryPause apart, none started with less than
+// tuneRetryMinimum of the shared deadline left. Bus errors are not retried.
+std::int64_t v_searches = 1;
+if (v_known)
+{
+v_searches = 0;
+}
+for (;((((v_board)->v_failure).v_err == nullptr) && (m_Demod_SearchFailed(v_board) || (static_cast<std::int64_t>((m_dib8000_readStatus((v_board)->v_demod)) & (v_feHasLock)) == 0)));)
 {
 At((v_board)->v_memoryValid,v_slot) = false;
-(v_board)->v_memoryFallback = true;
 std::int64_t v_remaining = v_deadline.Sub(((v_board)->v_demod)->v_now());
+if (v_known)
+{
+v_known = false;
+(v_board)->v_memoryFallback = true;
 if ((v_remaining <= 0))
 {
 return MakeError("DiB8096: remembered tune deadline expired");
 }
+}
+else
+{
+if ((m_Demod_SearchFailed(v_board) && m_Demod_searchFoundNothing(v_board)))
+{
+break;
+}
+if ((v_searches >= v_tuneAttempts))
+{
+break;
+}
+v_remaining = Sub<std::int64_t>(v_remaining,v_tuneRetryPause);
+if ((v_remaining < v_tuneRetryMinimum))
+{
+break;
+}
+((v_board)->v_demod)->v_sleep(v_tuneRetryPause);
+if ((((v_board)->v_failure).v_err != nullptr))
+{
+break;
+}
+}
+v_searches++;
 ((v_board)->v_demod)->v_tuneTimeout = v_remaining;
 m_channel_clear((&(v_board)->v_channel));
 ((v_board)->v_channel).v_frequency = v_hz;
@@ -4810,5 +4942,25 @@ return nullptr;
 bool m_Demod_SearchFailed(T_Demod* v_board)
 {
 return (((((v_board)->v_failure).v_err == nullptr) && (((v_board)->v_demod)->v_status == v_statusTuneFailed)) && (((v_board)->v_demod)->v_tuneState == v_demodStop));
+}
+// Source: tune_result.go (searchFoundNothing)
+// 探索に失敗した直後のr526とr533を記録し、地デジの信号がまったく無いかを返す。
+// 実測では信号の無いチャンネルはすべてr526=19、r533=0で、信号があればr526は100以上だった。
+bool m_Demod_searchFoundNothing(T_Demod* v_board)
+{
+T_dib8000* v_demod = (v_board)->v_demod;
+std::uint16_t v_noise = m_dib8000_readWord(v_demod,526);
+std::uint16_t v_ber = m_dib8000_readWord(v_demod,533);
+T_tuneTiming* v_t = (&(v_demod)->v_timing);
+if (((v_t)->v_failures < static_cast<std::int64_t>((v_t)->v_failNoise.size())))
+{
+At((v_t)->v_failNoise,(v_t)->v_failures) = v_noise;
+At((v_t)->v_failBER,(v_t)->v_failures) = v_ber;
+}
+(v_t)->v_failures++;
+(v_t)->v_noSignal = (((((v_board)->v_failure).v_err == nullptr) && (static_cast<std::int64_t>(v_noise) < v_emptyNoiseLimit)) && (v_ber == 0));
+// 省くのは設定が有効で、起動・復帰直後の選局でない場合だけ。起動直後は弱い局でもr526=19を返した実測がある。
+(v_t)->v_skipped = (((v_t)->v_noSignal && (v_board)->v_skipEmpty) && !((v_t)->v_fresh));
+return (v_t)->v_skipped;
 }
 } // namespace px4::torne::dibnative

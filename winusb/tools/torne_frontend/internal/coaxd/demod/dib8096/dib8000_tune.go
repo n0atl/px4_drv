@@ -708,8 +708,9 @@ func (state *dib8000) setSyncWait() {
 // 100ms steps until the callback time, so every step waited at least that
 // long, and some steps need more than the callback time they ask for:
 // started 1ms after the FFT search ends, the guard search can report a
-// failure. 10ms held on every try, on the CECH-ZD1 J under Linux and Windows.
-const minTuneStep = 10 * time.Millisecond
+// failure. 10ms fails on some weak and strong channels (aki0429/coax
+// cech-zd1j-stability); keep the Linux 100ms floor.
+const minTuneStep = 100 * time.Millisecond
 
 // getTimeout is dib8000_get_timeout: delay is in 100us units, or in symbols
 // when symbolDependent.
@@ -1103,12 +1104,18 @@ func (state *dib8000) setFrontend() error {
 		return err
 	}
 
+	state.timing.acquisitions++
+	phase := state.now()
+
 	// tune the tuner
 	if state.tunerSetParams != nil {
 		if err := state.tunerSetParams(); err != nil {
 			return err
 		}
 	}
+	mark := state.now()
+	state.timing.tuner += mark.Sub(phase)
+	phase = mark
 
 	state.tuneState = agcStart
 
@@ -1135,6 +1142,11 @@ func (state *dib8000) setFrontend() error {
 		return state.failure.err
 	}
 
+	mark = state.now()
+	state.timing.agc += mark.Sub(phase)
+	phase = mark
+	searching := true
+
 	state.tuneState = demodStart
 
 	giveUp := state.now().Add(state.tuneTimeout)
@@ -1147,6 +1159,12 @@ func (state *dib8000) setFrontend() error {
 		if delay != 0 {
 			callbackTime = state.now().Add(time.Duration(delay) * 100 * time.Microsecond)
 			haveCallback = true
+		}
+		if searching && !inAutosearch(state.tuneState) {
+			mark = state.now()
+			state.timing.search += mark.Sub(phase)
+			phase = mark
+			searching = false
 		}
 
 		// we are in autosearch
@@ -1185,6 +1203,13 @@ func (state *dib8000) setFrontend() error {
 		if active && state.now().After(giveUp) {
 			return fmt.Errorf("DiB8000: tune did not finish within %v (state %d)", state.tuneTimeout, state.tuneState)
 		}
+	}
+
+	mark = state.now()
+	if searching {
+		state.timing.search += mark.Sub(phase)
+	} else {
+		state.timing.sync += mark.Sub(phase)
 	}
 
 	// set output mode

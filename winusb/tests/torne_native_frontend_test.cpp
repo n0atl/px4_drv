@@ -17,6 +17,7 @@ public:
     std::map<std::uint16_t,std::uint16_t> regs{{896,0x01b3},{897,0x8002}};
     std::map<std::uint16_t,std::uint16_t> tuner{{0x1a,0x0a27}};
     std::map<std::uint16_t,std::deque<std::uint16_t>> queues;
+    std::map<std::uint16_t,unsigned> reads;
     std::ofstream out;
     Time now{1000000000000};
     unsigned count=0;
@@ -40,7 +41,7 @@ public:
         }
         if(length!=2||data.size()!=(address==0x12?2:1))throw std::runtime_error("read shape");
         std::uint16_t value;
-        if(address==0x12){auto reg=std::uint16_t((data[0]<<8)|data[1]);value=regs[reg];auto& queue=queues[reg];if(!queue.empty()){value=queue.front();if(queue.size()>1)queue.pop_front();}}
+        if(address==0x12){auto reg=std::uint16_t((data[0]<<8)|data[1]);++reads[reg];value=regs[reg];auto& queue=queues[reg];if(!queue.empty()){value=queue.front();if(queue.size()>1)queue.pop_front();}}
         else value=tuner[data[0]];
         Slice<std::uint8_t> read{std::uint8_t(value>>8),std::uint8_t(value)};out<<" ";Hex(read);out<<"\n";return {read,nullptr};
     }
@@ -71,7 +72,7 @@ int RunFixture(int argc,char** argv){
                 resumeBus.count=11;resumeBus.failIO=true;
                 if(resume.Command(0x15,{},response))throw std::runtime_error("resume hid I2C failure");
             }
-            for(const auto* mode:{"locked","nosignal","timeout","unknown","iofail","waitfail","cband","remembered","capremembered"}){
+            for(const auto* mode:{"locked","nosignal","noskip","noisy","timeout","unknown","iofail","waitfail","cband","remembered","capremembered"}){
                 if((std::string(mode)=="remembered"||std::string(mode)=="capremembered")&&!TestFlag("TORNE_TEST_CHANNEL_MEMORY"))continue;
                 if(std::string(mode)=="capremembered"&&!TestFlag("TORNE_TEST_CAPTRIM_REUSE"))continue;
                 char* fixture[]={argv[0],const_cast<char*>(mode),const_cast<char*>("NUL")};if(RunFixture(3,fixture))return 1;
@@ -81,18 +82,39 @@ int RunFixture(int argc,char** argv){
         if(argc!=3)return 2;std::string mode=argv[1];FakeBus bus(argv[2]);
         if(mode=="locked"||mode=="cband"||(mode=="remembered"||mode=="capremembered"))bus.Locked();if(mode=="unknown")bus.regs[897]=0x7000;if(mode=="capremembered")bus.tuner[0x1a]=0x0a23;
         bus.failIO=mode=="iofail";bus.failWait=mode=="waitfail";
-        NativeFrontend frontend(bus);frontend.ConfigureTuning(TestFlag("TORNE_TEST_CHANNEL_MEMORY"),TestFlag("TORNE_TEST_CAPTRIM_REUSE"),TestFlag("TORNE_TEST_FAST_TUNING"));frontend.SetClock([&](){return bus.now;});
+        NativeFrontend frontend(bus);frontend.ConfigureTuning(TestFlag("TORNE_TEST_CHANNEL_MEMORY"),TestFlag("TORNE_TEST_CAPTRIM_REUSE"),mode!="noskip");frontend.SetClock([&](){return bus.now;});
         auto run=[&](std::uint8_t kind,std::uint32_t hz=0){
             std::vector<std::uint8_t> body,response;if(kind==0x11)for(unsigned i=0;i<4;++i)body.push_back(std::uint8_t(hz>>(i*8)));if(kind==0x12)body={0};
             bool ok=frontend.Command(kind,body,response);bus.out<<"C "<<unsigned(kind)<<" "<<unsigned(ok)<<" ";bus.Hex(response);bus.out<<"\n";
             if(kind==0x10){bool failure=mode=="unknown"||mode=="iofail"||mode=="waitfail";if(ok==failure)throw std::runtime_error("initialize outcome");}
-            else if(kind==0x11){if(ok==(mode=="timeout"))throw std::runtime_error("tune outcome");if(ok&&((mode=="nosignal")!=(response==std::vector<std::uint8_t>{1})))throw std::runtime_error("search outcome");}
+            else if(kind==0x11){if(!ok)throw std::runtime_error("tune outcome");if((mode=="nosignal"||mode=="noskip"||mode=="noisy"||mode=="timeout")!=(response==std::vector<std::uint8_t>{1}))throw std::runtime_error("search outcome");}
             else if(!ok)throw std::runtime_error("status/output/sleep outcome");
             if(kind==0x13){if(response.size()!=24||bool(response[0])!=(mode=="locked"||mode=="cband"||(mode=="remembered"||mode=="capremembered")))throw std::runtime_error("lock outcome");}
         };
         run(0x10);if(mode=="unknown"||mode=="iofail"||mode=="waitfail")return 0;
-        if(mode=="nosignal")bus.queues[1284]={1,0,1};
-        run(0x11,mode=="cband"?93142857:473142857);run(0x13);run(0x12);run(0x14);
+        const bool empty_mode=mode=="nosignal"||mode=="noskip"||mode=="noisy";
+        if(empty_mode)bus.queues[1284]={1,0,1};
+        // 雑音があれば信号の痕跡ありとして再探索し、何も無ければ1回で諦める。
+        if(mode=="noisy")bus.regs[526]=200;
+        const unsigned searches_before=bus.reads[526];
+        run(0x11,mode=="cband"?93142857:473142857);
+        // 模擬バスでは1回目の探索だけで期限の大半を使い、再探索の回数は検証できない。
+        // 探索失敗ごとに雑音量を1回読み、信号なしの判断が雑音量で分かれることを確認する。
+        // 起動直後の選局は弱い局を信号なしと読むことがあるため、空きと判断しても再探索を省かない。
+        // 2回目の選局からは、設定が有効なときだけ省く。
+        if(empty_mode){
+            for(int tune=0;tune<2;++tune){
+                const auto timing=frontend.LastTuneTiming();
+                if(bus.reads[526]-searches_before!=timing.failures&&tune==0)throw std::runtime_error("search failure record");
+                if(timing.failures<1)throw std::runtime_error("search failure record");
+                if(timing.no_signal!=(mode!="noisy"))throw std::runtime_error("empty channel decision");
+                if(timing.fresh!=(tune==0))throw std::runtime_error("fresh tune record");
+                if(timing.skipped!=(tune==1&&mode=="nosignal"))throw std::runtime_error("empty channel skip");
+                if(mode=="noisy"&&timing.fail_noise[0]!=200)throw std::runtime_error("noise record");
+                if(tune==0){bus.queues[1284]={1,0,1};run(0x11,479142857);}
+            }
+        }
+        run(0x13);run(0x12);run(0x14);
         if((mode=="remembered"||mode=="capremembered")){bus.queues[1284]={0};run(0x11,473142857);run(0x13);run(0x14);}
         if(mode=="locked"){bus.queues[1284]={1,0,2};run(0x11,213142857);run(0x13);run(0x14);}
         return 0;

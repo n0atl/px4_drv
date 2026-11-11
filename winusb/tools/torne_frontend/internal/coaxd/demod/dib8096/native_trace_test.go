@@ -83,6 +83,7 @@ func TestNativePortTrace(t *testing.T) {
 			board.demod.fastPoll = board.reuseTemperature
 			board.demod.earlyData = board.reuseTemperature
 			board.useMemory = os.Getenv("TORNE_TEST_CHANNEL_MEMORY") == "1"
+			board.skipEmpty = true
 			board.tuner.reuseCaptrim = os.Getenv("TORNE_TEST_CAPTRIM_REUSE") == "1"
 			board.setTiming(clock.Now, func(d time.Duration) {
 				fmt.Fprintf(file, "S %d\n", d)
@@ -103,7 +104,10 @@ func TestNativePortTrace(t *testing.T) {
 					}
 				case 0x11:
 					e = board.Tune(hz)
-					if e == nil && board.SearchFailed() {
+					if board.TuneTimedOut(e) {
+						e = nil
+						body = []byte{1}
+					} else if e == nil && board.SearchFailed() {
 						body = []byte{1}
 					}
 				case 0x12:

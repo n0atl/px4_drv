@@ -139,6 +139,35 @@ type dib8000 struct {
 	sleep       func(time.Duration)
 	now         func() time.Time
 	tuneTimeout time.Duration
+
+	// timing adds up where setFrontend spent its time since Tune last
+	// cleared it. It is for the host's log only and changes no decision.
+	timing tuneTiming
+}
+
+// tuneTiming splits the acquisitions of one Tune into the tuner (including
+// captrim), the AGC startup, the parameter autosearch (FFT and guard) and the
+// synchronization that follows it up to lock or failure.
+type tuneTiming struct {
+	acquisitions int64
+	tuner        time.Duration
+	agc          time.Duration
+	search       time.Duration
+	sync         time.Duration
+	// 探索に失敗するたびに読んだr526とr533 (先頭tuneAttempts回分)、失敗回数、
+	// 信号が無いと判断したか、それにより再探索を省いたか、起動・復帰直後の選局か。ログ専用。
+	failures  int64
+	failNoise [tuneAttempts]uint16
+	failBER   [tuneAttempts]uint16
+	noSignal  bool
+	skipped   bool
+	fresh     bool
+}
+
+// inAutosearch reports whether the demodulator is still before or inside the
+// FFT/guard search, the states setFrontend passes through until demodStep3.
+func inAutosearch(tuneState int) bool {
+	return tuneState == demodStart || tuneState == demodSearchNext || tuneState == demodStep1 || tuneState == demodStep2
 }
 
 // readWord is dib8000_read_word.

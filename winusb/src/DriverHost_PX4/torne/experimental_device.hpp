@@ -41,7 +41,8 @@ private:
 	HANDLE cancel_ = nullptr;
 	std::string id_;
 	bool registered_ = false;
-	bool output_error_packets_ = false;
+	// 信号が無いと判断したチャンネルの再探索を省くか (SkipEmptyChannels)。
+	bool skip_empty_ = false;
 	// TS用bulk INは複数の転送を常に投入し、受信スレッドの遅延中もbridgeのFIFOを空ける。
 	unsigned int usb_transfer_size_ = 6144, usb_transfer_count_ = 16;
 };

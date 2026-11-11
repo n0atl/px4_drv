@@ -258,6 +258,12 @@ type Demod struct {
 	memoryValid    [64]bool
 	memoryLastUsed bool
 	memoryFallback bool
+	// skipEmpty は信号が無いと判断したチャンネルの再探索を省くか (設定)。
+	// fresh はInitializeまたはSleepの後、まだ選局していないことを示す。
+	// 起動・復帰直後の選局では、実測で受信できる弱い局 (強度-87dBm) が1回だけ
+	// r526=19・強度-109dBmと信号が無い値を返したため、この選局では省かない。
+	skipEmpty bool
+	fresh     bool
 
 	failure failure
 	channel channel
@@ -349,6 +355,7 @@ func (board *Demod) Initialize() (err error) {
 	board.memoryFallback = false
 	board.tuner.capLastReused = false
 	board.tuner.capMemory = [64]capMemoryEntry{}
+	board.fresh = true
 	defer board.flush(&err)
 	board.failure.err = nil
 
@@ -402,6 +409,8 @@ func (board *Demod) SetGPIO(pin uint8, high bool) (err error) {
 // locked or given up; Status tells which. Up to 170MHz (CBAND, VHF 1-3) the
 // gain is first found by the tuner's software AGC, see setParamOverride.
 func (board *Demod) Tune(frequencyHz uint32) (err error) {
+	board.demod.timing = tuneTiming{fresh: board.fresh}
+	board.fresh = false
 	if board.useMemory {
 		return board.tuneRemembered(frequencyHz)
 	}
@@ -417,15 +426,60 @@ func (board *Demod) Tune(frequencyHz uint32) (err error) {
 		board.asleep = false
 	}
 
-	// A DVBv5 tune from a frequency alone starts from a cleared cache.
-	board.channel.clear()
-	board.channel.frequency = frequencyHz
-
-	if err := board.demod.setFrontend(); err != nil {
-		return err
+	// A usable signal can occasionally miss the FFT/guard acquisition after a
+	// channel change (aki0429/coax cech-zd1j-stability). Retry a failed
+	// acquisition with a fresh property cache; reusing the first attempt's
+	// parameters would skip the search that failed. Every attempt shares one
+	// absolute deadline so the caller's tune budget is never exceeded, and bus
+	// errors and the state-machine timeout remain real errors.
+	budget := board.demod.tuneTimeout
+	deadline := board.demod.now().Add(budget)
+	for attempt := 0; attempt < tuneAttempts; attempt++ {
+		if attempt != 0 {
+			remaining := deadline.Sub(board.demod.now()) - tuneRetryPause
+			if remaining < tuneRetryMinimum {
+				break
+			}
+			board.demod.sleep(tuneRetryPause)
+			if board.failure.err != nil {
+				return board.failure.err
+			}
+			board.demod.tuneTimeout = remaining
+		}
+		// A DVBv5 tune from a frequency alone starts from a cleared cache.
+		board.channel.clear()
+		board.channel.frequency = frequencyHz
+		err := board.demod.setFrontend()
+		board.demod.tuneTimeout = budget
+		if err != nil {
+			return err
+		}
+		if board.failure.err != nil {
+			return board.failure.err
+		}
+		if !board.SearchFailed() && board.demod.readStatus()&feHasLock != 0 {
+			break
+		}
+		if board.failure.err != nil {
+			return board.failure.err
+		}
+		// A channel with no ISDB-T signal at all fails every search; do not
+		// spend two more searches on it. See searchFoundNothing.
+		if board.SearchFailed() && board.searchFoundNothing() {
+			break
+		}
 	}
 	return board.failure.err
 }
+
+// tuneAttempts, tuneRetryPause and tuneRetryMinimum bound the acquisition
+// retry: at most three searches, 100ms apart as in aki0429/coax, and no new
+// search once less than one second of the shared deadline remains.
+const (
+	tuneAttempts     = 3
+	tuneRetryPause   = 100 * time.Millisecond
+	tuneRetryMinimum = 1000 * time.Millisecond
+)
 
 // setParamOverride is dib8096_set_param_override, installed as the tuner's
 // set_params: it switches the VHF/UHF input, tunes the tuner, moves the
@@ -629,5 +683,6 @@ func (board *Demod) Sleep() (err error) {
 		return err
 	}
 	board.asleep = true
+	board.fresh = true
 	return board.failure.err
 }

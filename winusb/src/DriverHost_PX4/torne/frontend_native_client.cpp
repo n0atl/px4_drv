@@ -49,6 +49,19 @@ bool NativeFrontendClient::Command(std::uint8_t kind,const std::vector<std::uint
             static_cast<long long>(i2c_us_),static_cast<unsigned long long>(wait_count_),
             static_cast<long long>(requested_wait_ns_/1000),static_cast<long long>(wait_us_),frontend_.MemoryHit(),frontend_.MemoryFallback(),frontend_.CaptrimReused());
     }
+    if(kind==0x11) {
+        // acquisitions=2以上なら探索をやり直している。各段の時間は全試行の合計。
+        const auto t=frontend_.LastTuneTiming();
+        msg_info("torne: tune phases acquisitions=%lld search_failed=%d timed_out=%d tuner_ms=%lld agc_ms=%lld search_ms=%lld sync_ms=%lld\n",
+            static_cast<long long>(t.acquisitions),ok&&response.size()==1&&response[0]==1,frontend_.TuneTimedOut(),
+            static_cast<long long>(t.tuner_ns/1000000),static_cast<long long>(t.agc_ns/1000000),
+            static_cast<long long>(t.search_ns/1000000),static_cast<long long>(t.sync_ns/1000000));
+        // 探索に失敗するたびのr526/r533と、信号なしと判断して再探索を省いたか。判断基準の確認用。
+        if(t.failures)
+            msg_info("torne: search failures count=%lld no_signal=%d skipped=%d fresh=%d r526=%u,%u,%u r533=%u,%u,%u\n",
+                static_cast<long long>(t.failures),t.no_signal,t.skipped,t.fresh,
+                t.fail_noise[0],t.fail_noise[1],t.fail_noise[2],t.fail_ber[0],t.fail_ber[1],t.fail_ber[2]);
+    }
     if(!ok){error_=frontend_.Error();return false;}
     if(auto err=CheckState()){error_=*err;response.clear();return false;}
     return true;

@@ -63,7 +63,11 @@ func execute(demod *dib8096.Demod, f frame) ([]byte,error) {
 		return nil,demod.SetGPIO(1,true)
 	case 0x11:
 		if len(f.body)!=4 { return nil,errors.New("invalid tune command") }
-		if err:=demod.Tune(binary.LittleEndian.Uint32(f.body));err!=nil { return nil,err }
+		if err:=demod.Tune(binary.LittleEndian.Uint32(f.body));err!=nil {
+			// 同期途中の期限切れは通信異常ではないため、探索失敗として返す。
+			if demod.TuneTimedOut(err) { return []byte{1},nil }
+			return nil,err
+		}
 		// Transport failureとは分け、元の探索処理が失敗を確定した場合だけ通知する。
 		if demod.SearchFailed() { return []byte{1},nil }
 		return nil,nil

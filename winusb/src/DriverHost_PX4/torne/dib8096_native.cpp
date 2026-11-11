@@ -56,17 +56,22 @@ struct NativeFrontend::State {
 };
 NativeFrontend::NativeFrontend(Bus& bus):state_(std::make_unique<State>(bus)){}
 NativeFrontend::~NativeFrontend()=default;
-void NativeFrontend::ConfigureTuning(bool remember_channels,bool reuse_captrim,bool fast_tuning){
+// 温度補償の再利用、DC補正の短縮、3ms間隔のポーリング、同期前のデータ出力は、
+// 弱い局と強すぎる局で探索に失敗しやすく実機での効果も確認できなかったため、設定から外した。
+// 各フラグは既定のfalseのまま残り、比較用のGo参照コードだけが使う。
+void NativeFrontend::ConfigureTuning(bool remember_channels,bool reuse_captrim,bool skip_empty){
+    state_->board.v_skipEmpty=skip_empty;
     state_->board.v_useMemory=remember_channels;
     state_->tuner.v_reuseCaptrim=reuse_captrim;
-    state_->board.v_reuseTemperature=fast_tuning;
-    state_->tuner.v_fastDC=fast_tuning;
-    state_->demod.v_fastPoll=fast_tuning;
-    state_->demod.v_earlyData=fast_tuning;
 }
 bool NativeFrontend::MemoryHit() const {return state_->board.v_memoryLastUsed;}
 bool NativeFrontend::MemoryFallback() const {return state_->board.v_memoryFallback;}
 bool NativeFrontend::CaptrimReused() const {return state_->tuner.v_capLastReused;}
+NativeFrontend::TuneTiming NativeFrontend::LastTuneTiming() const {
+    const auto& t=state_->demod.v_timing;
+    return {t.v_acquisitions,t.v_tuner,t.v_agc,t.v_search,t.v_sync,t.v_failures,
+        {t.v_failNoise[0],t.v_failNoise[1],t.v_failNoise[2]},{t.v_failBER[0],t.v_failBER[1],t.v_failBER[2]},t.v_noSignal,t.v_skipped,t.v_fresh};
+}
 void NativeFrontend::SetClock(std::function<Time()> now){state_->demod.v_now=std::move(now);}
 bool NativeFrontend::Command(std::uint8_t kind,const std::vector<std::uint8_t>& body,std::vector<std::uint8_t>& response){
     try{return Execute(kind,body,response);}
@@ -82,7 +87,13 @@ bool NativeFrontend::Execute(std::uint8_t kind,const std::vector<std::uint8_t>& 
     case 0x11:{
         if(body.size()!=4){error_="invalid tune command";return false;}
         const auto hz=std::uint32_t(body[0])|(std::uint32_t(body[1])<<8)|(std::uint32_t(body[2])<<16)|(std::uint32_t(body[3])<<24);
-        err=m_Demod_Tune(board,hz);if(!err&&m_Demod_SearchFailed(board))response={1};break;}
+        tune_timed_out_=false;
+        err=m_Demod_Tune(board,hz);
+        // 探索のやり直しで残り時間が短くなると、同期の途中で状態機械の期限に達することがある。
+        // I2Cや待機は正常に終わっているので、通信異常ではなく探索失敗として返す。
+        // 失敗として返すとホストはセッション全体を異常扱いにし、以後の選局がすべて失敗する。
+        if(err&&!board->v_failure.v_err&&err->rfind("DiB8000: tune did not finish",0)==0){err=nullptr;tune_timed_out_=true;response={1};break;}
+        if(!err&&m_Demod_SearchFailed(board))response={1};break;}
     case 0x12:
         if(body.size()!=1||body[0]>v_OutputFIFO){error_="invalid output command";return false;}
         err=m_Demod_SetOutputMode(board,body[0]);break;

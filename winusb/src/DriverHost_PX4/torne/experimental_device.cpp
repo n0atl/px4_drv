@@ -95,6 +95,23 @@ struct ExperimentalSession {
 		if (!ok) { healthy = false; bus.Invalidate(); }
 		return ok;
 	}
+	// 復調器の監視レジスタを読む。torne_frontend の外部 helper は未知の命令を
+	// 失敗として扱いセッションを無効化するため、frontend 命令を増やさず直接読む。
+	// 読み出し失敗は Command と同じく I2C 経路の異常として扱い、状態を破棄する。
+	bool ReadRegisters(const std::uint16_t *regs, std::uint16_t *values, std::size_t count, Clock::time_point deadline)
+	{
+		std::lock_guard<std::mutex> lock(control_mutex);
+		if (!healthy || !frontend_started) return false;
+		control.Begin(deadline);
+		for (std::size_t i = 0; i < count; ++i) {
+			if (registers.Read(regs[i], values[i], deadline) != I2cResult::ok) {
+				healthy = false;
+				bus.Invalidate();
+				return false;
+			}
+		}
+		return true;
+	}
 	void Invalidate()
 	{
 		std::lock_guard<std::mutex> lock(control_mutex);
@@ -106,7 +123,7 @@ struct ExperimentalSession {
 		control.Begin(Clock::now() + std::chrono::seconds(8));
 		return bootstrap.Initialize(GetTickCount() | 1u) == BootstrapResult::ok && bus.BeginAfterBootstrap(bootstrap);
 	}
-	bool InitializeFrontend(bool output_error_packets)
+	bool InitializeFrontend(bool skip_empty)
 	{
 		std::lock_guard<std::mutex> lock(control_mutex);
 		if (!healthy) return false;
@@ -130,19 +147,22 @@ struct ExperimentalSession {
 		const auto helper = px4::util::path::GetDir() + L"TorneFrontendExperimental.exe";
 		if (!frontend_started && !frontend.Start(helper)) return false;
 #else
-        frontend.ConfigureTuning(true,true,true);
+        // 同じ周波数の伝送パラメータとcaptrimの再利用は常に有効にする。2回目以降の選局が約2.4秒から
+        // 1.2～1.4秒になり、合わなければすぐに通常の探索へ戻る。値は初期化のたびに破棄する。
+        frontend.ConfigureTuning(true,true,skip_empty);
 #endif
 		frontend_started = true;
 		std::vector<std::uint8_t> response;
 		bool ok = frontend.Command(0x10, {}, response, deadline) && response.empty();
-		if (ok && output_error_packets) {
-			// SMO error-discardを解除する診断用設定。受信できない層の復元や
-			// ホスト側のnull補完は行わず、復調器が出したTEIもそのまま上位へ渡す。
+		if (ok) {
+			// 他の機種と同じく、復調器が出したTEI付きのパケットも捨てずに上位へ渡す。
+			// torneの復調器は既定で誤りパケットを捨てるため、SMO error-discardを解除する。
+			// 受信できない層の復元やホスト側のnull補完は行わない。
 			std::uint16_t mode=0,verified=0;
 			ok=registers.Read(299,mode,deadline)==I2cResult::ok &&
 				registers.Write(299,static_cast<std::uint16_t>(mode & ~0x0040u),deadline)==I2cResult::ok &&
 				registers.Read(299,verified,deadline)==I2cResult::ok && !(verified & 0x0040);
-			msg_info("torne: OutputErrorPackets SMO=%04x verified=%04x result=%d\n",mode,verified,ok);
+			msg_info("torne: error packets SMO=%04x verified=%04x result=%d\n",mode,verified,ok);
 		}
 		if (!ok) { healthy = false; bus.Invalidate(); }
 		return ok;
@@ -323,7 +343,7 @@ public:
 		try {
 			session_ = parent_.AcquireSession();
 			if (!session_) return -EIO;
-			if (!session_->InitializeFrontend(parent_.output_error_packets_)) {
+			if (!session_->InitializeFrontend(parent_.skip_empty_)) {
 				msg_err("torne: initialize failed (%s).\n", session_->frontend.Error().c_str());
 				SleepFrontend();
 				session_.reset();
@@ -415,8 +435,10 @@ protected:
 		if (!stream_buf_->Purge()) return -EIO;
 		stream_buf_->ResetInputPacketCount();
 		failed_ = false;
-		// 実験版は復調器/lock/先頭TSを共通の5秒予算へ含める。旧機種のTuneは変更しない。
-		const auto deadline = Clock::now() + std::chrono::seconds(5);
+		// 実験版は復調器/lock/先頭TSを共通の予算へ含める。旧機種のTuneは変更しない。
+		// 復調器は探索失敗時に同じ期限内で再探索するため、その最大5秒にlock確認と
+		// 先頭TSの待ちを加えた8秒を上限とする。
+		const auto deadline = Clock::now() + std::chrono::seconds(8);
 		const auto hz = params_.freq * 1000u;
 		std::vector<std::uint8_t> frequency(4), response;
 		for (unsigned i = 0; i < 4; ++i) frequency[i] = static_cast<std::uint8_t>(hz >> (8 * i));
@@ -426,6 +448,7 @@ protected:
 		if (IsConfirmedSearchFailure(response.data(), response.size())) {
 			failed_ = true;
 			msg_info("torne: confirmed search failure id=%s freq_khz=%u\n", parent_.id_.c_str(), params_.freq);
+			LogSignal("search_failed");
 			return -ECANCELED;
 		}
 		bool locked = false;
@@ -434,8 +457,9 @@ protected:
 			if (response[0] == 1) { locked = true; break; }
 			if (WaitForSingleObject(parent_.cancel_, 20) != WAIT_TIMEOUT) return -ECANCELED;
 		}
-		if (!locked) { failed_ = true; return -ETIMEDOUT; }
+		if (!locked) { failed_ = true; LogSignal("no_lock"); return -ETIMEDOUT; }
 		const auto lock_end = Clock::now();
+		LogSignal("locked");
 		tuned_ = true;
 		const int result = capture_ ? StartReader(deadline) : 0;
 		const auto stream_end = Clock::now();
@@ -447,6 +471,23 @@ protected:
 		return result;
 	}
 private:
+	// 空きチャンネルを早く諦める条件を決めるため、選局の結果ごとに信号の値を記録する。
+	// 探索失敗・ロックなし・ロックの3通りを同じ形で出し、空き・弱い局・受信できる局を比べる。
+	// r568はロック状態の生値、r390はAGC(信号強度の元)、r526は雑音量らしい値、r533はビタビ前BERの候補。
+	// 選局の判断には使わない。読み出しに失敗した場合はCommandと同じくセッションを異常扱いにする。
+	void LogSignal(const char *result)
+	{
+		std::vector<std::uint8_t> status;
+		double strength = 0.0, cnr = 0.0;
+		const bool status_ok = session_->Command(0x13, {}, status, Clock::now() + std::chrono::seconds(1)) && status.size() == 24;
+		if (status_ok) { std::memcpy(&strength, status.data() + 16, 8); std::memcpy(&cnr, status.data() + 8, 8); }
+		static const std::uint16_t regs[] = { 568, 390, 526, 533 };
+		std::uint16_t values[4]{};
+		const bool regs_ok = status_ok && session_->ReadRegisters(regs, values, 4, Clock::now() + std::chrono::seconds(1));
+		msg_info("torne: tune signal id=%s freq_khz=%u result=%s ok=%d strength_dbm=%.1f cnr=%.1f r568=0x%04x r390=%u r526=%u r533=%u\n",
+			parent_.id_.c_str(), params_.freq, result, regs_ok, strength, (status_ok && status[1]) ? cnr : 0.0,
+			values[0], values[1], values[2], values[3]);
+	}
 	void SleepFrontend()
 	{
 		if (!session_ || !parent_.available_) return;
@@ -477,7 +518,7 @@ private:
 		// 負荷で完了処理と再投入が遅れ、bridgeのFIFOが溢れてTSが欠落する。
 		if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL))
 			msg_warn("torne: SetThreadPriority(TIME_CRITICAL) failed (%lu)\n", GetLastError());
-		StreamFramer framer(parent_.output_error_packets_);
+		StreamFramer framer(true);
 		TsQuality quality;
 		std::vector<std::unique_ptr<StreamTransfer>> transfers;
 		std::vector<std::uint8_t> output;
@@ -599,7 +640,9 @@ ExperimentalDevice::ExperimentalDevice(const std::wstring &path, const px4::Devi
 ExperimentalDevice::~ExperimentalDevice() { Term(); if (cancel_) CloseHandle(cancel_); }
 int ExperimentalDevice::Init()
 {
-	output_error_packets_=px4::util::wtob(device_def_.configs.Get(L"OutputErrorPackets",L"false"));
+	// trueで、信号が無いと判断したチャンネルは1回の探索で終える(速い)。既定のfalseは毎回最大3回探索する(遅い)。
+	// 判定は録画の選局にも働き、確認できた受信環境が限られるため、取りこぼしを避ける側を既定にする。
+	skip_empty_=px4::util::wtob(device_def_.configs.Get(L"SkipEmptyChannels",L"false"));
 	// TS受信のUSB転送は他のPX系と同じUrbMaxPackets(1転送のTSパケット数)とMaxUrbs(同時投入数)で指定する。
 	// UrbMaxPacketsが無ければXferPacketsを使う。torneのbridgeには別の転送単位が無いため、どちらも1転送の長さになる。
 	// bulkの最大パケット長512の倍数でないと転送の途中で短いパケットとして完了するため、512の倍数へ切り下げる。
@@ -621,7 +664,8 @@ int ExperimentalDevice::Init()
 		else if (configs.Exists(L"MaxUrbs")) count=px4::util::wtoui32(configs.Get(L"MaxUrbs"));
 		usb_transfer_count_=(count>=1 && count<=64)?count:default_count;
 	}
-	msg_info("torne: config usb_xfer=%u x %u\n",usb_transfer_size_,usb_transfer_count_);
+	msg_info("torne: config skip_empty=%d usb_xfer=%u x %u\n",
+		skip_empty_,usb_transfer_size_,usb_transfer_count_);
 	// 接続個体をすべて登録し、BonDriverのReceiverNameで利用個体を選ぶ。
 	if (usb_dev_.descriptor.idVendor != 0x054c || usb_dev_.descriptor.idProduct != 0x04b2 || device_def_.receivers.size() != 1) return -EINVAL;
 	UCHAR alternate = 0xff;

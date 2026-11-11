@@ -33,13 +33,40 @@ func (board *Demod) tuneRemembered(hz uint32) (err error) {
 		board.memoryValid[slot] = false
 		return err
 	}
-	if known && board.SearchFailed() {
+	// Remembered parameters that no longer lock fall back to a full search at
+	// once. A full search that fails is retried like Tune: at most
+	// tuneAttempts searches, tuneRetryPause apart, none started with less than
+	// tuneRetryMinimum of the shared deadline left. Bus errors are not retried.
+	searches := 1
+	if known {
+		searches = 0
+	}
+	for board.failure.err == nil && (board.SearchFailed() || board.demod.readStatus()&feHasLock == 0) {
 		board.memoryValid[slot] = false
-		board.memoryFallback = true
 		remaining := deadline.Sub(board.demod.now())
-		if remaining <= 0 {
-			return fmt.Errorf("DiB8096: remembered tune deadline expired")
+		if known {
+			known = false
+			board.memoryFallback = true
+			if remaining <= 0 {
+				return fmt.Errorf("DiB8096: remembered tune deadline expired")
+			}
+		} else {
+			if board.SearchFailed() && board.searchFoundNothing() {
+				break
+			}
+			if searches >= tuneAttempts {
+				break
+			}
+			remaining -= tuneRetryPause
+			if remaining < tuneRetryMinimum {
+				break
+			}
+			board.demod.sleep(tuneRetryPause)
+			if board.failure.err != nil {
+				break
+			}
 		}
+		searches++
 		board.demod.tuneTimeout = remaining
 		board.channel.clear()
 		board.channel.frequency = hz
